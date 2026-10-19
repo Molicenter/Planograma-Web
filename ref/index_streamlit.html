@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:transparent;
+            font-family:"Source Sans Pro",sans-serif;
+            -webkit-user-select:none;user-select:none}
+  #status{font:12px sans-serif;color:#888;padding:8px}
+  #wrap{max-width:100%;padding-bottom:6px}
+  /* v7.40 - gondola a esquerda, painel (Banco/legenda) a direita; em tela
+     estreita o painel desce sozinho (flex-wrap) */
+  #root{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+  .gcol{flex:0 1 auto;max-width:100%;overflow-x:auto;overflow-y:hidden;
+        padding-bottom:4px}
+  .gbox{display:inline-block;background:linear-gradient(#dfe5eb,#d3dae1);
+        padding:12px 14px 14px;border-radius:12px;
+        box-shadow:0 1px 4px rgba(16,24,40,.08);position:relative}
+  /* placa do topo = testeira da loja, com o nome da categoria */
+  .placa{background:linear-gradient(#0f4a77,#0B3D63);color:#fff;
+         font:700 14px/1 "Source Sans Pro",sans-serif;letter-spacing:.03em;
+         text-align:center;padding:9px 12px;border-radius:6px 6px 2px 2px;
+         margin:0 0 6px;white-space:nowrap;overflow:hidden;
+         text-overflow:ellipsis;box-shadow:inset 0 -3px 0 #E5007D}
+  .gcase{display:flex;align-items:flex-end}
+  .upright{width:14px;border-radius:3px;
+           background-color:#8b9197;
+           background-image:repeating-linear-gradient(to bottom,
+             #5f656b 0 3px,rgba(0,0,0,0) 3px 14px),
+             linear-gradient(to right,#6e747a,#a9afb5 45%,#7b8187);
+           background-size:4px 14px,100% 100%;
+           background-position:center 8px,0 0;
+           background-repeat:repeat-y,no-repeat;
+           box-shadow:1px 0 2px rgba(0,0,0,.18);align-self:stretch}
+  .side{flex:1 1 300px;min-width:280px;max-width:520px;
+        background:#fff;border:1px solid #e3e7eb;border-radius:12px;
+        padding:12px 14px;box-shadow:0 1px 3px rgba(16,24,40,.06)}
+  .side h4{font:700 12px sans-serif;color:#0B3D63;text-transform:uppercase;
+           letter-spacing:.06em;margin:0 0 6px}
+  .side .bloco{margin:0 0 14px}
+  .cores{display:flex;gap:4px;margin:0 0 8px}
+  .cores button{flex:1;border:1px solid #cfd4d8;background:#fff;color:#333;
+     font:600 11px sans-serif;padding:5px 4px;border-radius:6px;cursor:pointer}
+  .cores button.on{background:#0B3D63;border-color:#0B3D63;color:#fff}
+  .legenda{display:flex;flex-wrap:wrap;gap:4px 10px;max-height:120px;
+           overflow-y:auto}
+  .legenda span{font:11px sans-serif;color:#333;display:flex;
+           align-items:center;gap:5px}
+  .legenda i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  /* v7.40 - tela vazia: aviso dentro da gondola */
+  .vazio{position:absolute;left:0;right:0;top:84px;
+         display:flex;justify-content:center;pointer-events:none;z-index:4}
+  .vazio div{background:rgba(255,255,255,.96);border:1px solid #dfe3e6;
+         border-radius:12px;padding:16px 22px;text-align:center;
+         box-shadow:0 4px 14px rgba(16,24,40,.12);max-width:80%}
+  .vazio b{display:block;font:700 15px sans-serif;color:#0B3D63;
+         margin:6px 0 4px}
+  .vazio small{font:12px sans-serif;color:#6b7680}
+  .ginner{background:#fff;padding:8px 4px 4px;display:flex;
+          flex-direction:column}
+  /* v7.22 - o modulo virou COLUNA propria (com montante de verdade dos
+     dois lados), entao os separadores desenhados no fundo da regua
+     sairam. A etiqueta agora fica no topo da coluna. */
+  .modtag{font:600 9px sans-serif;color:#9aa0a6;padding:0 0 2px 2px;
+          pointer-events:none}
+  .modfolga{flex:0 0 auto}
+  /* v7.26 - TOPO DO MODULO: a barra cinza de cima e o teto da gondola.
+     Arrastar ela muda a ALTURA TOTAL do modulo (a regua do topo cresce
+     ou encolhe junto), que e o unico jeito de alinhar o topo de um
+     modulo com o do vizinho - redistribuir por dentro nao muda a soma. */
+  .topo{height:10px;background:#8d9297;border-radius:2px;margin:0 0 4px;
+        display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .topo.ajusta{cursor:ns-resize}
+  .topo.ajusta:hover{filter:brightness(1.12)}
+  .topo.arrastando{outline:2px solid #fff;outline-offset:-2px}
+  .topo.alinhado{background:#e8620d}
+  .shelf{background:#fff;display:flex;align-items:flex-end;
+         position:relative;overflow:visible}
+  .shelf.dragover{outline:3px dashed #e8620d;outline-offset:-3px}
+  .testeira{height:16px;color:#fff;
+            background:linear-gradient(#f07a2c,#e8620d 55%,#c9520a);
+            display:flex;align-items:center;justify-content:space-between;
+            padding:0 8px;font:600 10px sans-serif;border-radius:2px;
+            margin:0 0 10px;box-shadow:0 3px 4px rgba(0,0,0,.18)}
+  .occ{padding:0 6px;border-radius:8px;font-weight:600}
+  /* v7.23 - a tarja E a prateleira: arrastar ela pra cima/baixo muda a
+     altura da regua. v7.24: vale pros DOIS perfis (cfg.ajustaAlt); so a
+     edicao de dimensao/foto (cfg.edita) continua exclusiva do admin. */
+  .testeira.ajusta{cursor:ns-resize}
+  .testeira.ajusta:hover{filter:brightness(1.12)}
+  .topo .grip{width:26px;height:6px;border-radius:3px;
+        background-image:repeating-linear-gradient(to bottom,
+          rgba(255,255,255,.85) 0 2px,rgba(0,0,0,0) 2px 4px);
+        flex:0 0 auto;pointer-events:none}
+  .testeira .grip{width:22px;height:8px;margin:0 6px;border-radius:3px;
+        background-image:repeating-linear-gradient(to bottom,
+          rgba(255,255,255,.85) 0 2px,rgba(0,0,0,0) 2px 4px);
+        flex:0 0 auto;pointer-events:none}
+  .testeira.arrastando{outline:2px solid #fff;outline-offset:-2px}
+  /* v7.40 - semaforo da ocupacao da regua */
+  .occ.zero{background:rgba(255,255,255,.22);color:#fff}
+  .occ.ok{background:#2e7d32;color:#fff}
+  .occ.warn{background:#ffd54f;color:#5d4000}
+  .occ.low{background:#e53935;color:#fff}
+  .occ.over{background:#7f0000;color:#fff}
+  /* rodape da gondola, com volume */
+  .gbase{height:16px;border-radius:2px 2px 4px 4px;
+         background:linear-gradient(#9aa0a6,#6f757b);
+         box-shadow:inset 0 2px 0 rgba(255,255,255,.25)}
+  .blk{position:relative;flex:0 0 auto;cursor:grab;touch-action:none;
+       background-color:transparent;border:none;box-sizing:border-box;
+       background-repeat:repeat-x;background-position:left bottom}
+  .blk.nofoto{background:#fdf0dd;border:1px dashed #e8620d}
+  .blk .nome{font:9px sans-serif;color:#a35708;overflow:hidden;text-align:center;
+             position:absolute;inset:0;display:flex;align-items:center;
+             justify-content:center;pointer-events:none}
+  .blk .badge{position:absolute;top:-9px;left:50%;transform:translateX(-50%);
+              background:#e8620d;color:#fff;font:600 10px sans-serif;
+              padding:1px 6px;border-radius:8px;pointer-events:none;z-index:5}
+  .fbtn{position:absolute;top:-9px;width:17px;height:17px;border-radius:50%;
+        background:#e8620d;color:#fff;font:600 12px/17px sans-serif;
+        text-align:center;cursor:pointer;z-index:7;border:1px solid #fff;
+        box-shadow:0 1px 2px rgba(0,0,0,.25)}
+  .fbtn.minus{left:-6px}
+  .fbtn.plus{right:-6px}
+  /* X de remover: vermelho, sempre visivel */
+  .xbtn{position:absolute;top:-9px;width:17px;height:17px;
+        border-radius:50%;background:#c0392b;color:#fff;
+        font:700 11px/16px sans-serif;text-align:center;cursor:pointer;
+        z-index:8;border:1px solid #fff;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+  /* v7.27 - duplicar o produto na regua de baixo (mesmo modulo). Fica
+     DENTRO do proprio bloco (bottom:2px, nao negativo) de proposito: um
+     botao com top/bottom negativo vazaria pra fora do .shelf e a tarja
+     (.testeira) da regua, que vem DEPOIS no DOM, pintaria por cima e
+     escondia o botao. So aparece quando ha regua abaixo no mesmo modulo. */
+  .dbtn{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);
+        width:16px;height:16px;border-radius:50%;background:#0B3D63;
+        color:#fff;font:700 11px/15px sans-serif;text-align:center;
+        cursor:pointer;z-index:9;border:1px solid #fff;
+        box-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .blk .handle{position:absolute;top:0;right:-4px;width:12px;height:100%;
+               cursor:ew-resize;z-index:6}
+  .blk .handle::after{content:"";position:absolute;top:35%;right:5px;width:3px;
+               height:30%;background:#e8620d;border-radius:2px;opacity:.7}
+  .blk.dragging{opacity:.35}
+  /* v7.40 - "Colorir por": faixa colorida no pe do produto */
+  .blk .cor{position:absolute;left:0;right:0;bottom:0;height:4px;
+            pointer-events:none;z-index:3;opacity:.95}
+  .blk.comcor{box-shadow:inset 0 0 0 2px var(--c)}
+  /* v7.12 - item mais alto que a regua onde caiu: contorno vermelho */
+  .blk.alto{outline:2px solid #c0392b;outline-offset:-2px}
+  #ghost{position:fixed;pointer-events:none;z-index:99;opacity:.85;
+         background-color:#fff;border:2px solid #e8620d;box-sizing:border-box;
+         background-repeat:repeat-x;background-position:left bottom;display:none}
+  #banco{background:#f7f9fa;border:1px solid #dfe3e6;border-radius:8px;
+         margin-top:4px;padding:8px;
+         display:flex;flex-wrap:wrap;gap:6px;min-height:80px;max-height:420px;
+         overflow-y:auto;align-content:flex-start}
+  #banco.dragover{outline:3px dashed #e8620d;outline-offset:-3px}
+  .banco-sub{font:11px sans-serif;color:#6b7680;margin:0 0 4px}
+  #filtro{margin:4px 0;padding:6px 9px;border-radius:6px;
+          border:1px solid #cfd4d8;font:12px sans-serif;width:100%;
+          box-sizing:border-box;background:#fff;color:#333}
+  .chip{background:#fff;border:1px solid #e4e7ea;border-radius:6px;
+        padding:4px 6px;display:flex;
+        align-items:center;gap:6px;font:11px sans-serif;color:#333;
+        cursor:grab;touch-action:none;max-width:210px}
+  .chip img{width:26px;height:34px;object-fit:contain}
+  .chip .cn{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  .chip.sem-dim{opacity:.55;cursor:pointer}
+  .chip .mot{color:#c0392b;font-size:9px}
+  .hint{font:11px/1.45 sans-serif;color:#6b7680;margin:0}
+</style>
+</head>
+<body>
+<div id="status">Carregando g&ocirc;ndola...</div>
+<div id="wrap" style="display:none"><div id="root"></div></div>
+<div id="ghost"></div>
+<script>
+"use strict";
+/* ---------- protocolo Streamlit (componente sem build) ---------- */
+function sendMsg(type, data){
+  window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:type},data),"*");
+}
+function setHeight(px){
+  var h = px || (document.documentElement.scrollHeight + 10);
+  sendMsg("streamlit:setFrameHeight", {height: h});
+}
+function alturasAtuais(){
+  /* v7.23 - uma altura por slot, na ordem de state.shelves */
+  var a = [];
+  for(var s=0; s<state.shelves.length; s++) a.push(alturaRegua(s));
+  return a;
+}
+function sendValue(){
+  sendMsg("streamlit:setComponentValue",
+    {value:{rev:cfg.rev, shelves:state.shelves, fora:state.fora,
+            alturas:alturasAtuais()}, dataType:"json"});
+}
+/* dois cliques num produto -> pede pro app abrir o editor daquele EAN */
+function sendEdit(ean){
+  if(pendTimer){ clearTimeout(pendTimer); pendTimer=null; }
+  sendMsg("streamlit:setComponentValue",
+    {value:{rev:cfg.rev, shelves:state.shelves, fora:state.fora,
+            alturas:alturasAtuais(),
+            edit:{ean:ean, t:Date.now()}}, dataType:"json"});
+}
+
+var cfg=null, state=null, drag=null, recebeu=false, filtroTxt="";
+var pendTimer=null;
+var dragAlt=null;          /* v7.23 - arraste da tarja (altura da regua) */
+var dragTopo=null;         /* v7.26 - arraste do topo (altura do modulo) */
+var ALT_MIN=8;             /* cm - regua nao fica menor que isso */
+var edicaoLocal=false;   /* trava: temos mudanca local ainda nao confirmada */
+var lastTap={ean:null,t:0};   /* deteccao de duplo clique/toque */
+var DBL_MS=350;
+/* v7.40 - "Colorir por" (so visual). Lembra a escolha no navegador. */
+var modoCor="nada";
+try{ modoCor = localStorage.getItem("mp_cor") || "nada"; }catch(e){}
+var PALETA=["#1e88e5","#e53935","#43a047","#fb8c00","#8e24aa","#00acc1",
+            "#c0ca33","#6d4c41","#d81b60","#3949ab","#00897b","#f4511e",
+            "#7cb342","#5e35b1","#fdd835","#546e7a"];
+var mapaCor={};
+function chaveCor(ean){
+  var p=pinfo(ean);
+  if(modoCor==="marca") return (p.marca||"(sem marca)").trim().toUpperCase();
+  if(modoCor==="sub") return (p.sub||"(sem subcategoria)").trim();
+  return null;
+}
+function corDe(k){ return mapaCor[k] || "#999"; }
+function montarMapaCor(){
+  mapaCor={};
+  if(modoCor==="nada") return [];
+  var ordem=[], visto={};
+  state.shelves.forEach(function(sh){ sh.forEach(function(e){
+    var k=chaveCor(e.ean); if(k!==null && !visto[k]){ visto[k]=1; ordem.push(k); }
+  }); });
+  ordem.forEach(function(k,i){ mapaCor[k]=PALETA[i%PALETA.length]; });
+  return ordem;
+}
+
+function estadoStr(sh, fo){ return JSON.stringify([sh, fo]); }
+
+/* edita local na hora; sincroniza com o app ~1s depois da ultima mexida.
+   Usado no ARRASTE da alca (onde faz sentido esperar o usuario parar). */
+function scheduleSend(){
+  edicaoLocal=true;
+  render();
+  if(pendTimer) clearTimeout(pendTimer);
+  pendTimer=setTimeout(function(){ pendTimer=null; sendValue(); }, 900);
+}
+
+/* aplica a mudanca e MANDA JA pro app - sem esperar o debounce.
+   Usado nos botoes -, + e X, que sao acoes pontuais e deliberadas.
+   Assim o app nunca repinta por cima com o estado antigo. */
+function sendNow(){
+  edicaoLocal=true;
+  if(pendTimer){ clearTimeout(pendTimer); pendTimer=null; }
+  render();
+  sendValue();
+}
+
+function mostrarErro(msg){
+  var st=document.getElementById("status");
+  st.style.display="block";
+  st.style.color="#c0392b";
+  st.textContent="Erro no componente da gondola: " + msg;
+  setHeight(90);
+}
+
+window.addEventListener("message", function(ev){
+  try{
+    if(!ev.data || ev.data.type!=="streamlit:render") return;
+    recebeu = true;
+    var a = ev.data.args || {};
+    var raw = (a.data !== undefined) ? a.data
+              : (a.args && a.args.data !== undefined ? a.args.data : undefined);
+    if(raw === undefined){ mostrarErro("payload nao chegou (args.data ausente)"); return; }
+    if(typeof raw === "string"){ raw = raw.replace(/\bNaN\b/g, "null"); }
+    var d = (typeof raw === "string") ? JSON.parse(raw) : raw;
+    var mesmaSel = cfg && cfg.rev===d.rev;
+    var eco = mesmaSel && state &&
+              estadoStr(d.shelves,d.fora)===estadoStr(state.shelves,state.fora);
+    cfg = {largura:d.largura, altura:d.altura, escala:d.escala,
+           modulo:d.modulo||d.largura, produtos:d.produtos, rev:d.rev,
+           edita:(d.edita!==false),
+           /* v7.24 - alca de altura da regua, separada do `edita`: o
+              perfil USUARIO tambem arrasta a tarja. Payload antigo (sem
+              a chave) continua liberando, igual ao `edita`. */
+           ajustaAlt:(d.ajusta_alt!==false),
+           /* v7.40 - placa do topo e tela vazia */
+           titulo:(d.titulo||""), vazia:!!d.vazia,
+           /* v7.22 - um slot por modulo x regua, na ordem de shelves */
+           slots:(Array.isArray(d.slots) && d.slots.length) ? d.slots : null,
+           /* v7.12 - uma altura por regua (topo -> base). O app manda
+              "alturas"; sem ela (payload antigo) usa a altura unica. */
+           alturas:(Array.isArray(d.alturas) && d.alturas.length)
+                   ? d.alturas : null};
+    /* Nao repinta se:
+       - e o eco do nosso proprio estado; ou
+       - a selecao e a mesma e temos edicao local pendente/nao confirmada
+         (debounce em andamento OU flag edicaoLocal). Impede o app de
+         devolver o estado ANTIGO por cima do que o usuario acabou de mexer. */
+    if(eco || (mesmaSel && (pendTimer || edicaoLocal))){
+      if(eco) edicaoLocal=false;   /* app confirmou nosso estado: destrava */
+      document.getElementById("status").style.display="none";
+      document.getElementById("wrap").style.display="block";
+      return;
+    }
+    /* render novo (troca de selecao/gondola/perfil): estado do app manda */
+    edicaoLocal=false;
+    state = {shelves:d.shelves, fora:d.fora};
+    document.getElementById("status").style.display="none";
+    document.getElementById("wrap").style.display="block";
+    render();
+  }catch(e){ mostrarErro(String(e)); }
+});
+
+/* pronto: manda ja, no load e re-tenta ate o 1o render chegar */
+sendMsg("streamlit:componentReady",{apiVersion:1});
+setHeight(60);
+window.addEventListener("load", function(){
+  sendMsg("streamlit:componentReady",{apiVersion:1});
+});
+var tent=0;
+var timer=setInterval(function(){
+  if(recebeu || tent++>20){ clearInterval(timer);
+    if(!recebeu) mostrarErro("o app nao enviou os dados (recarregue a pagina)");
+    return; }
+  sendMsg("streamlit:componentReady",{apiVersion:1});
+},250);
+
+/* ---------- helpers ---------- */
+function pinfo(ean){ return cfg.produtos[ean] || {}; }
+/* v7.22 - cada posicao e um SLOT (modulo x regua). O app manda
+   cfg.slots na MESMA ordem de state.shelves; sem ela (index.html novo
+   com app velho) monta um slot por regua com a largura unica. */
+function slotDe(s){
+  if(cfg.slots && cfg.slots.length){
+    return cfg.slots[Math.min(s, cfg.slots.length-1)];
+  }
+  return {mod:0, reg:s, larg:cfg.largura,
+          alt:(cfg.alturas && cfg.alturas.length)
+              ? cfg.alturas[Math.min(s, cfg.alturas.length-1)] : cfg.altura,
+          y:0};
+}
+function alturaRegua(s){ return slotDe(s).alt; }
+function larguraRegua(s){ return slotDe(s).larg; }
+/* indices dos slots agrupados por modulo, cada grupo em ordem topo->base */
+function gruposPorModulo(){
+  var g = [];
+  for(var s=0; s<state.shelves.length; s++){
+    var m = slotDe(s).mod || 0;
+    while(g.length <= m) g.push([]);
+    g[m].push(s);
+  }
+  for(var k=0;k<g.length;k++){
+    g[k].sort(function(a,b){ return slotDe(a).reg - slotDe(b).reg; });
+  }
+  return g;
+}
+function larguraPx(ean){ var p=pinfo(ean); return Math.max(6, Math.round((p.larg||0)*cfg.escala)); }
+function alturaPx(ean){ var p=pinfo(ean); return Math.max(10, Math.round((p.alt||0)*cfg.escala)); }
+function ocupacao(shelf){
+  var cm=0;
+  for(var i=0;i<shelf.length;i++){ var p=pinfo(shelf[i].ean);
+    if(p.larg) cm += p.larg*shelf[i].frentes; }
+  return cm;
+}
+function fmt(v){ return v.toFixed(1).replace(".", ","); }
+function dimTxt(p){
+  if(p.larg && p.alt){
+    var t = fmt(p.larg)+" x "+fmt(p.alt);
+    if(p.prof) t += " x "+fmt(p.prof);
+    return t+" cm (LxAxP)";
+  }
+  return "sem dimensao";
+}
+function tituloProd(p, ean, frentes){
+  var t = "";
+  if(p.cod_erp) t += "Cod ERP: "+p.cod_erp+"\n";
+  t += (p.desc||ean);
+  if(frentes!==undefined)
+    t += " | R$ "+((p.preco||0).toFixed(2))+" | "+frentes+" frente(s)";
+  t += "\n"+dimTxt(p)+"\nEAN "+ean;
+  if(cfg && cfg.edita) t += "\nDois cliques = editar";
+  return t;
+}
+/* devolve true se este pointerdown fecha um duplo clique no mesmo EAN */
+function tapDuplo(ean){
+  var agora=Date.now();
+  if(lastTap.ean===ean && (agora-lastTap.t)<DBL_MS){
+    lastTap={ean:null,t:0};
+    return true;
+  }
+  lastTap={ean:ean,t:agora};
+  return false;
+}
+
+/* tira o item da prateleira e joga no Banco/Fora */
+function removerParaBanco(s, i){
+  var e = state.shelves[s][i];
+  if(!e) return;
+  state.shelves[s].splice(i, 1);
+  state.fora.push({ean:e.ean, motivo:"removido manualmente"});
+  sendNow();
+}
+
+/* v7.27 - duplicar produto pra regua de baixo (pedido do Adriano).
+   Acha o indice da REGUA ABAIXO desta, dentro do MESMO MODULO (usa a
+   mesma logica de agrupamento do arraste de altura em cascata). Devolve
+   null se esta ja for a ultima regua do modulo. */
+function shelfAbaixoMesmoModulo(s){
+  var grupos = gruposPorModulo();
+  for(var m=0; m<grupos.length; m++){
+    var g = grupos[m], pos = g.indexOf(s);
+    if(pos!==-1) return (pos+1<g.length) ? g[pos+1] : null;
+  }
+  return null;
+}
+/* copia o item (mesmo EAN, mesma qtde de frentes) pro FIM da regua de
+   baixo. Nao mexe na regua de origem - o item continua nela tambem. */
+function duplicarAbaixo(s, i){
+  var alvo = shelfAbaixoMesmoModulo(s);
+  var e = state.shelves[s] && state.shelves[s][i];
+  if(alvo===null || !e) return;
+  state.shelves[alvo].push({ean:e.ean, frentes:e.frentes});
+  sendNow();
+}
+
+/* ---------- render ---------- */
+function render(){
+  var root = document.getElementById("root");
+  root.innerHTML = "";
+  var legendaKeys = montarMapaCor();          /* v7.40 */
+  var gcol = document.createElement("div"); gcol.className = "gcol";
+  var gbox = document.createElement("div"); gbox.className = "gbox";
+  gcol.appendChild(gbox); root.appendChild(gcol);
+  if(cfg.titulo){
+    var pl = document.createElement("div"); pl.className = "placa";
+    pl.textContent = cfg.titulo; pl.title = cfg.titulo;
+    gbox.appendChild(pl);
+  }
+
+  /* v7.22 - UMA COLUNA POR MODULO, com montante entre elas. O produto
+     nao atravessa a emenda, entao cada modulo x regua e uma area de
+     drop propria.
+     ALINHAMENTO: as colunas sao encostadas no CHAO (align-items:
+     flex-end no .gcase) e o modulo com MENOS reguas ganha um espacador
+     em cima. Assim a tarja laranja continua fora da altura da regua,
+     igual sempre foi, e mesmo assim os pisos batem. */
+  var grupos = gruposPorModulo();
+  var OVER = 26;   /* tarja (16) + respiro (10), por regua */
+  var altPx = grupos.map(function(g){
+    var soma = 0;
+    for(var i=0;i<g.length;i++) soma += alturaRegua(g[i])*cfg.escala;
+    return Math.round(soma) + OVER*g.length;
+  });
+  var alvo = Math.max.apply(null, altPx.concat([0]));
+
+  var gcase = document.createElement("div");
+  gcase.className = "gcase";
+  var upL = document.createElement("div"); upL.className = "upright";
+  gcase.appendChild(upL);
+
+  grupos.forEach(function(g, m){
+    var W = Math.round(larguraRegua(g[0])*cfg.escala);
+    var inner = document.createElement("div"); inner.className = "ginner";
+    /* v7.26 - o espacador existe SEMPRE (mesmo com 0px) e fica marcado,
+       pra dar pra reajustar as folgas durante o arraste do topo sem
+       remontar a arvore inteira */
+    var sp = document.createElement("div");
+    sp.className = "modfolga"; sp.dataset.mod = m;
+    sp.style.height = Math.max(0, alvo - altPx[m])+"px";
+    inner.appendChild(sp);
+    var topo = document.createElement("div");
+    topo.className = "topo" + ((cfg.ajustaAlt && cfg.slots)? " ajusta" : "");
+    topo.dataset.mod = m; topo.style.width = W+"px";
+    if(cfg.ajustaAlt && cfg.slots){
+      topo.innerHTML = "<span class='grip'></span>";
+      topo.title = "Topo do m\u00f3dulo - arraste pra cima/baixo pra mudar "
+        + "a ALTURA TOTAL (a r\u00e9gua do topo acompanha). Encosta "
+        + "sozinho quando chega na altura de outro m\u00f3dulo.";
+      ligarArrasteTopo(topo, g);
+    }
+    inner.appendChild(topo);
+    if(grupos.length > 1){
+      var tg = document.createElement("div"); tg.className = "modtag";
+      tg.textContent = "M"+(m+1)+" \u00b7 "+
+        (+larguraRegua(g[0])).toFixed(0)+" cm";
+      inner.appendChild(tg);
+    }
+    g.forEach(function(s, pos){
+      var shelf = state.shelves[s];
+      var altCm = alturaRegua(s), largCm = larguraRegua(s);
+      var H = Math.round(altCm*cfg.escala);
+      var sh = document.createElement("div");
+      sh.className="shelf"; sh.dataset.shelf=s;
+      sh.style.width=W+"px"; sh.style.height=H+"px";
+      shelf.forEach(function(e, i){ sh.appendChild(mkBlock(e, s, i)); });
+      inner.appendChild(sh);
+
+      var cm = ocupacao(shelf), pct = largCm? cm/largCm : 0;
+      var cls = cm<=0? "zero" : pct>1.001? "over" : pct>=0.9? "ok"
+              : pct>=0.7? "warn" : "low";          /* v7.40 - semaforo */
+      var te = document.createElement("div");
+      te.className="testeira" + ((cfg.ajustaAlt && cfg.slots)? " ajusta" : "");
+      te.style.width=Math.max(20,W-16)+"px";
+      te.dataset.slot=s;
+      te.innerHTML = "<span class='rot'>R"+(pos+1)+(pos===0?" (topo)":"")+
+        " \u00b7 "+(+altCm).toFixed(0)+" cm</span>"+
+        ((cfg.ajustaAlt && cfg.slots)? "<span class='grip'></span>" : "")+
+        "<span class='occ "+cls+"'>"+cm.toFixed(0)+"/"+largCm.toFixed(0)+
+        " cm ("+Math.round(pct*100)+"%)</span>";
+      if(cfg.ajustaAlt && cfg.slots){
+        /* v7.25 - TODAS as reguas abaixo desta no modulo, da mais perto
+           pra mais longe: o emprestimo desce em cascata */
+        var abaixos = g.slice(pos+1);
+        te.title = "Arraste pra cima/baixo pra mudar a altura desta "
+          + "r\u00e9gua" + (abaixos.length
+              ? " (o que ela ganha, as de baixo perdem \u2014 a altura do "
+                + "m\u00f3dulo n\u00e3o muda)"
+              : " (\u00e9 a \u00faltima: muda a altura do m\u00f3dulo)");
+        ligarArrasteAltura(te, s, abaixos, sh);
+      }
+      inner.appendChild(te);
+    });
+    var base = document.createElement("div");
+    base.className="gbase"; base.style.width=W+"px";
+    inner.appendChild(base);
+    gcase.appendChild(inner);
+    var up = document.createElement("div"); up.className = "upright";
+    gcase.appendChild(up);
+  });
+  gbox.appendChild(gcase);
+  /* v7.40 - tela vazia: aviso dentro da gondola */
+  if(cfg.vazia){
+    var vz = document.createElement("div"); vz.className = "vazio";
+    vz.innerHTML = "<div><span style='font-size:30px'>\u2B05\uFE0F</span>"
+      + "<b>Escolha uma categoria na barra lateral</b>"
+      + "<small>Enquanto isso, d\u00e1 pra ajustar a altura das r\u00e9guas "
+      + "pela tarja laranja e a altura total pela barra cinza do topo.</small></div>";
+    gbox.appendChild(vz);
+  }
+
+  /* ---------- painel lateral ---------- */
+  var side = document.createElement("div"); side.className = "side";
+  root.appendChild(side);
+
+  if(!cfg.vazia){
+    var bcor = document.createElement("div"); bcor.className = "bloco";
+    bcor.innerHTML = "<h4>\uD83C\uDFA8 Colorir por</h4>";
+    var cores = document.createElement("div"); cores.className = "cores";
+    [["nada","Nada"],["marca","Marca"],["sub","Subcategoria"]].forEach(function(o){
+      var b = document.createElement("button");
+      b.textContent = o[1]; if(modoCor===o[0]) b.className = "on";
+      b.addEventListener("click", function(){
+        modoCor = o[0];
+        try{ localStorage.setItem("mp_cor", modoCor); }catch(e){}
+        render();
+      });
+      cores.appendChild(b);
+    });
+    bcor.appendChild(cores);
+    if(legendaKeys.length){
+      var lg = document.createElement("div"); lg.className = "legenda";
+      legendaKeys.forEach(function(k){
+        var sp2 = document.createElement("span");
+        sp2.innerHTML = "<i style='background:"+corDe(k)+"'></i>";
+        sp2.appendChild(document.createTextNode(k));
+        lg.appendChild(sp2);
+      });
+      bcor.appendChild(lg);
+    }
+    side.appendChild(bcor);
+  }
+
+  var bb = document.createElement("div"); bb.className = "bloco";
+  bb.innerHTML = "<h4>\uD83D\uDCE6 Banco / Fora ("+state.fora.length+")</h4>"
+    + "<div class='banco-sub'>Arraste pra c\u00e1 pra tirar da g\u00f4ndola; "
+    + "arraste daqui pra uma r\u00e9gua pra colocar.</div>";
+  side.appendChild(bb);
+  var root0 = root; root = bb;   /* filtro + banco entram no bloco */
+
+  var filtro = document.createElement("input");
+  filtro.id="filtro"; filtro.type="text"; filtro.placeholder="Buscar produto no Banco...";
+  filtro.value=filtroTxt;
+  filtro.addEventListener("input", function(){ filtroTxt=filtro.value;
+    renderBanco(); setHeight(); });
+  root.appendChild(filtro);
+
+  var bc = document.createElement("div");
+  bc.id="banco";
+  root.appendChild(bc);
+  renderBanco();
+  root = side;
+
+  var hb = document.createElement("div"); hb.className = "bloco";
+  hb.innerHTML = "<h4>\uD83D\uDCA1 Como usar</h4>";
+  side.appendChild(hb);
+  root = hb;
+  var hint=document.createElement("div");
+  hint.className="hint";
+  hint.textContent="Al\u00e7a da direita estica as frentes; \u2212/+ ajustam a quantidade; o X vermelho manda o item pro Banco; o \u2b07 azul duplica o produto na r\u00e9gua de baixo (mesmo m\u00f3dulo). Cada m\u00f3dulo \u00e9 fechado: o produto n\u00e3o atravessa a emenda."
+    + (cfg.ajustaAlt? " Arraste a tarja laranja pra cima/baixo pra mudar a altura da r\u00e9gua,"
+                    + " e a barra cinza do topo pra mudar a altura TOTAL do m\u00f3dulo (ela encosta sozinha na altura dos outros)." : "")
+    + (cfg.edita? " Dois cliques num produto abrem o editor (dimens\u00f5es e foto)." : "");
+  root.appendChild(hint);
+  root = root0;
+
+  setHeight();
+}
+
+function renderBanco(){
+  var bc = document.getElementById("banco");
+  bc.innerHTML="";
+  var f = filtroTxt.trim().toLowerCase();
+  state.fora.forEach(function(item,k){
+    var p = pinfo(item.ean);
+    var nome = (p.desc||item.ean).toLowerCase();
+    if(f && nome.indexOf(f)===-1) return;
+    bc.appendChild(mkChip(item,k));
+  });
+}
+
+function mkBlock(e, s, i){
+  var p = pinfo(e.ean);
+  var wUnit = larguraPx(e.ean), h = alturaPx(e.ean);
+  var largoTotal = wUnit*e.frentes;
+  var b = document.createElement("div");
+  var estoura = (p.alt && p.alt > alturaRegua(s) + 0.01);
+  b.className = "blk" + (p.foto? "" : " nofoto") + (estoura? " alto" : "");
+  b.dataset.shelf=s; b.dataset.idx=i; b.dataset.ean=e.ean;
+  b.style.width = largoTotal+"px";
+  b.style.height = h+"px";
+  b.title = tituloProd(p, e.ean, e.frentes)
+           + (estoura? "\n\u26A0 mais alto que esta regua ("
+                       +(+alturaRegua(s)).toFixed(0)+" cm)" : "");
+  if(p.foto){
+    b.style.backgroundImage = "url(\""+p.foto+"\")";
+    b.style.backgroundSize = wUnit+"px 100%";
+  } else {
+    var n=document.createElement("div"); n.className="nome";
+    n.textContent=(p.desc||e.ean).slice(0,20); b.appendChild(n);
+  }
+  var badge=document.createElement("div"); badge.className="badge";
+  badge.textContent="\u00d7"+e.frentes; b.appendChild(badge);
+  var kc = chaveCor(e.ean);                  /* v7.40 - Colorir por */
+  if(kc!==null){
+    var c0 = corDe(kc);
+    b.classList.add("comcor"); b.style.setProperty("--c", c0);
+    var fx=document.createElement("div"); fx.className="cor";
+    fx.style.background=c0; b.appendChild(fx);
+    b.title += "\n"+(modoCor==="marca"?"Marca: ":"Subcategoria: ")+kc;
+  }
+
+  var cabemBotoes = largoTotal >= 52;
+  if(cabemBotoes){
+    var bm=document.createElement("div"); bm.className="fbtn minus";
+    bm.textContent="\u2212"; bm.title="Tirar 1 frente";
+    bm.addEventListener("pointerdown",function(ev){ev.stopPropagation();ev.preventDefault();});
+    bm.addEventListener("click",function(ev){
+      ev.stopPropagation();
+      if(state.shelves[s][i].frentes>1){
+        state.shelves[s][i].frentes--; sendNow();   /* manda JA */
+      }
+    });
+    b.appendChild(bm);
+    var bp=document.createElement("div"); bp.className="fbtn plus";
+    bp.textContent="+"; bp.title="Somar 1 frente";
+    bp.addEventListener("pointerdown",function(ev){ev.stopPropagation();ev.preventDefault();});
+    bp.addEventListener("click",function(ev){
+      ev.stopPropagation();
+      state.shelves[s][i].frentes++; sendNow();      /* manda JA */
+    });
+    b.appendChild(bp);
+  }
+
+  /* X de remover pro Banco - sempre presente, qualquer nº de frentes.
+     Se ha o botao + (right:-6), o X fica um pouco pra dentro (right:12)
+     pra nao encostar; se nao ha +, o X fica no canto (right:-6). */
+  var bx=document.createElement("div"); bx.className="xbtn";
+  bx.textContent="\u00d7"; bx.title="Remover item (manda pro Banco)";
+  bx.style.top="-9px";
+  bx.style.right = cabemBotoes ? "13px" : "-6px";
+  bx.addEventListener("pointerdown",function(ev){ev.stopPropagation();ev.preventDefault();});
+  bx.addEventListener("click",function(ev){
+    ev.stopPropagation();
+    removerParaBanco(s, i);
+  });
+  b.appendChild(bx);
+
+  /* v7.27 - duplicar na regua de baixo (mesmo modulo). So aparece se
+     houver regua abaixo E o bloco tiver espaco (mesma largura minima
+     dos botoes -/+; altura minima 22px pra caber o circulo sem
+     espremer demais um item bem baixo). */
+  var alvoDup = shelfAbaixoMesmoModulo(s);
+  if(cabemBotoes && alvoDup!==null && h>=22){
+    var bd=document.createElement("div"); bd.className="dbtn";
+    bd.textContent="⬇";
+    bd.title="Duplicar este produto na régua de baixo (mesmo módulo)";
+    bd.addEventListener("pointerdown",function(ev){ev.stopPropagation();ev.preventDefault();});
+    bd.addEventListener("click",function(ev){
+      ev.stopPropagation();
+      duplicarAbaixo(s, i);
+    });
+    b.appendChild(bd);
+  }
+
+  var handle=document.createElement("div"); handle.className="handle";
+  handle.title="Arraste pra esticar (frentes)";
+  b.appendChild(handle);
+
+  handle.addEventListener("pointerdown",function(ev){
+    ev.stopPropagation(); ev.preventDefault();
+    handle.setPointerCapture(ev.pointerId);
+    drag={type:"stretch", s:s, i:i, startX:ev.clientX,
+          startFr:e.frentes, unit:wUnit, blk:b, badge:badge};
+  });
+  handle.addEventListener("pointermove",function(ev){
+    if(!drag || drag.type!=="stretch") return;
+    var dx = ev.clientX - drag.startX;
+    var fr = Math.max(1, Math.round((drag.startFr*drag.unit + dx)/drag.unit));
+    drag.fr = fr;
+    drag.blk.style.width = (fr*drag.unit)+"px";
+    drag.badge.textContent = "\u00d7"+fr;
+  });
+  handle.addEventListener("pointerup",function(ev){
+    if(!drag || drag.type!=="stretch") return;
+    var fr = (drag.fr!==undefined)? drag.fr : drag.startFr;
+    state.shelves[drag.s][drag.i].frentes = fr;
+    drag=null; scheduleSend();   /* arraste: pode esperar o debounce */
+  });
+
+  b.addEventListener("pointerdown",function(ev){
+    if(ev.target===handle) return;
+    ev.preventDefault();
+    if(cfg.edita && tapDuplo(e.ean)){ drag=null; sendEdit(e.ean); return; }
+    b.setPointerCapture(ev.pointerId);
+    drag={type:"move", from:"shelf", s:s, i:i, ean:e.ean, frentes:e.frentes,
+          blk:b, w:largoTotal, h:h, unit:wUnit, foto:p.foto};
+    startGhost(ev);
+    b.classList.add("dragging");
+  });
+  b.addEventListener("pointermove", moveGhost);
+  b.addEventListener("pointerup", dropAt);
+  return b;
+}
+
+function mkChip(item, k){
+  var p = pinfo(item.ean);
+  var temDim = p.larg && p.alt;
+  var c = document.createElement("div");
+  c.className = "chip" + (temDim? "" : " sem-dim");
+  c.dataset.banco=k;
+  var img = p.foto? "<img src=\""+p.foto+"\">" : "";
+  var mot = temDim? "<span class='mot'>"+(item.motivo||"")+"</span>"
+                  : "<span class='mot'>sem dimens\u00e3o"
+                    + (cfg.edita? " \u2014 2 cliques p/ medir" : "")+"</span>";
+  c.innerHTML = img+"<span class='cn'>"+(p.desc||item.ean)+"<br>"+mot+"</span>";
+  c.title = tituloProd(p, item.ean);
+  c.addEventListener("pointerdown",function(ev){
+    ev.preventDefault();
+    if(cfg.edita && tapDuplo(item.ean)){ drag=null; sendEdit(item.ean); return; }
+    if(!temDim) return;   /* sem dimensao nao arrasta, mas edita */
+    c.setPointerCapture(ev.pointerId);
+    drag={type:"move", from:"banco", k:k, ean:item.ean, frentes:1,
+          blk:c, w:larguraPx(item.ean), h:alturaPx(item.ean),
+          unit:larguraPx(item.ean), foto:p.foto};
+    startGhost(ev);
+    c.classList.add("dragging");
+  });
+  c.addEventListener("pointermove", moveGhost);
+  c.addEventListener("pointerup", dropAt);
+  return c;
+}
+
+/* ---------- v7.23: arraste da tarja = altura da regua ----------
+   A tarja e a prateleira fisica, entao puxar ela pra baixo faz a regua
+   de cima crescer e as de baixo encolherem na mesma medida - a altura
+   somada do modulo nao muda e o piso continua no lugar. Na ULTIMA
+   regua nao ha nada embaixo: ali o arraste muda a altura do modulo
+   inteiro (e o app avisa se os modulos deixarem de somar igual).
+
+   v7.25 - EMPRESTIMO EM CASCATA. Ate a v7.24 a regua so tomava espaco
+   da VIZINHA imediata, entao ela travava assim que essa vizinha batia
+   no minimo, mesmo com folga de sobra nas de baixo (caso do Adriano:
+   R1 do M2 parava em 13 cm porque a R2 tinha so 13 e o resto estava
+   nos 63/68 das caixas). Agora a regua toma da vizinha, depois da
+   seguinte, e assim por diante ate o fim do modulo - cada uma cede so
+   ate ALT_MIN. Encolher devolve tudo pra vizinha imediata, que e o
+   inverso do gesto natural.
+
+   O ajuste e local e instantaneo; so no soltar e que vai pro Streamlit,
+   que grava nos campos da sidebar (um rerun so por arraste). */
+function _rotAltura(el, s){
+  var r = el.querySelector(".rot");
+  if(!r) return;
+  var t = r.textContent;
+  r.textContent = t.replace(/\u00b7 [\d.,]+ cm$/,
+                            "\u00b7 "+alturaRegua(s).toFixed(0)+" cm");
+}
+/* Reparte o deslocamento `d` (cm) entre as reguas de baixo.
+   d > 0: a regua CRESCE e as de baixo cedem, da mais perto pra mais
+   longe, nenhuma abaixo de ALT_MIN. d < 0: a regua ENCOLHE e a
+   vizinha imediata fica com tudo. Devolve as alturas novas das de
+   baixo e o `real`, que e quanto o gesto conseguiu de fato. */
+function _repartirAltura(d, hs){
+  var novas = hs.slice(), real = 0;
+  if(!hs.length) return {novas:novas, real:d};
+  if(d <= 0){ novas[0] = hs[0] - d; return {novas:novas, real:d}; }
+  var falta = d;
+  for(var i=0; i<novas.length && falta > 0; i++){
+    var pode = Math.max(0, novas[i] - ALT_MIN);
+    var t = Math.min(pode, falta);
+    novas[i] -= t; falta -= t; real += t;
+  }
+  return {novas:novas, real:real};
+}
+function ligarArrasteAltura(te, s, abaixos, shEl){
+  te.addEventListener("pointerdown", function(ev){
+    ev.preventDefault(); ev.stopPropagation();
+    te.setPointerCapture(ev.pointerId);
+    dragAlt = {s:s, y0:ev.clientY, hA:alturaRegua(s), elA:shEl, te:te,
+               /* uma entrada por regua abaixo desta, no MESMO modulo,
+                  da mais perto pra mais longe */
+               ab:(abaixos||[]).map(function(k){
+                 return {s:k, h:alturaRegua(k),
+                         el:document.querySelector('.shelf[data-shelf="'+k+'"]'),
+                         te:document.querySelector('.testeira[data-slot="'+k+'"]')};
+               })};
+    te.classList.add("arrastando");
+  });
+  te.addEventListener("pointermove", function(ev){
+    if(!dragAlt || dragAlt.te!==te) return;
+    var d = Math.round((ev.clientY - dragAlt.y0)/cfg.escala);   /* cm */
+    if(dragAlt.hA + d < ALT_MIN) d = ALT_MIN - dragAlt.hA;      /* piso */
+    var r = _repartirAltura(d, dragAlt.ab.map(function(o){ return o.h; }));
+    var a = dragAlt.hA + r.real;                 /* so cresce o que coube */
+    if(a < ALT_MIN) return;
+    cfg.slots[dragAlt.s].alt = a;
+    dragAlt.elA.style.height = Math.round(a*cfg.escala)+"px";
+    _rotAltura(te, dragAlt.s);
+    dragAlt.ab.forEach(function(o, i){
+      var h = r.novas[i];
+      if(Math.abs(h - cfg.slots[o.s].alt) < 0.01) return;
+      cfg.slots[o.s].alt = h;
+      if(o.el) o.el.style.height = Math.round(h*cfg.escala)+"px";
+      if(o.te) _rotAltura(o.te, o.s);
+    });
+  });
+  function soltar(){
+    if(!dragAlt || dragAlt.te!==te) return;
+    te.classList.remove("arrastando");
+    dragAlt = null;
+    edicaoLocal = true;
+    if(pendTimer){ clearTimeout(pendTimer); pendTimer=null; }
+    render();          /* o espacador do topo e as folgas sao recalculados */
+    sendValue();       /* o app grava nos campos de altura da sidebar */
+  }
+  te.addEventListener("pointerup", soltar);
+  te.addEventListener("pointercancel", soltar);
+}
+
+/* ---------- v7.26: arraste do TOPO = altura total do modulo ----------
+   A cascata da v7.25 resolve a REPARTICAO dentro do modulo, mas nao a
+   SOMA: um modulo de 140 cm nunca alcanca o topo de um de 175, por mais
+   que se remaneje por dentro (o piso e a ancora, entao a folga fica em
+   cima). Faltava a alca do TETO. Puxar a barra cinza de cima estica ou
+   encolhe a regua do TOPO e, com ela, a altura total do modulo.
+   IMA: quando a soma chega perto (IMA_CM) da soma de outro modulo, ela
+   encosta exatamente nele - e a barra fica laranja avisando. E o gesto
+   do "deixar no mesmo nivel do modulo 1". */
+var IMA_CM = 4;
+function _somaModulo(g){
+  var t = 0; for(var i=0;i<g.length;i++) t += alturaRegua(g[i]); return t;
+}
+/* recalcula os espacadores do topo sem remontar a arvore (o elemento
+   arrastado tem que sobreviver ao pointermove) */
+function _ajustarFolgas(){
+  var grupos = gruposPorModulo(), OVER = 26;
+  var altPx = grupos.map(function(g){
+    var soma = 0;
+    for(var i=0;i<g.length;i++) soma += alturaRegua(g[i])*cfg.escala;
+    return Math.round(soma) + OVER*g.length;
+  });
+  var alvo = Math.max.apply(null, altPx.concat([0]));
+  grupos.forEach(function(g, m){
+    var sp = document.querySelector('.modfolga[data-mod="'+m+'"]');
+    if(sp) sp.style.height = Math.max(0, alvo - altPx[m])+"px";
+  });
+}
+function ligarArrasteTopo(el, g){
+  var sTopo = g[0];
+  el.addEventListener("pointerdown", function(ev){
+    ev.preventDefault(); ev.stopPropagation();
+    el.setPointerCapture(ev.pointerId);
+    var outras = gruposPorModulo().filter(function(o){
+      return o[0] !== sTopo; }).map(_somaModulo);
+    dragTopo = {s:sTopo, y0:ev.clientY, h0:alturaRegua(sTopo),
+                total0:_somaModulo(g), outras:outras, el:el,
+                shelf:document.querySelector('.shelf[data-shelf="'+sTopo+'"]'),
+                te:document.querySelector('.testeira[data-slot="'+sTopo+'"]')};
+    el.classList.add("arrastando");
+  });
+  el.addEventListener("pointermove", function(ev){
+    if(!dragTopo || dragTopo.el!==el) return;
+    /* pra CIMA (clientY menor) o modulo cresce */
+    var d = Math.round((dragTopo.y0 - ev.clientY)/cfg.escala);   /* cm */
+    var a = Math.max(ALT_MIN, dragTopo.h0 + d);
+    var total = dragTopo.total0 + (a - dragTopo.h0);
+    var grudou = false;
+    for(var i=0;i<dragTopo.outras.length;i++){
+      var alvo = dragTopo.outras[i];
+      if(Math.abs(total - alvo) <= IMA_CM && a + (alvo - total) >= ALT_MIN){
+        a += (alvo - total); total = alvo; grudou = true; break;
+      }
+    }
+    el.classList.toggle("alinhado", grudou);
+    cfg.slots[dragTopo.s].alt = a;
+    if(dragTopo.shelf)
+      dragTopo.shelf.style.height = Math.round(a*cfg.escala)+"px";
+    if(dragTopo.te) _rotAltura(dragTopo.te, dragTopo.s);
+    _ajustarFolgas();
+  });
+  function soltar(){
+    if(!dragTopo || dragTopo.el!==el) return;
+    el.classList.remove("arrastando");
+    dragTopo = null;
+    edicaoLocal = true;
+    if(pendTimer){ clearTimeout(pendTimer); pendTimer=null; }
+    render();
+    sendValue();       /* o app grava nos campos de altura da sidebar */
+  }
+  el.addEventListener("pointerup", soltar);
+  el.addEventListener("pointercancel", soltar);
+}
+
+/* ---------- drag de mover ---------- */
+function startGhost(ev){
+  var g=document.getElementById("ghost");
+  g.style.width=drag.w+"px"; g.style.height=drag.h+"px";
+  if(drag.foto){ g.style.backgroundImage="url(\""+drag.foto+"\")";
+                 g.style.backgroundSize=drag.unit+"px 100%"; }
+  else { g.style.backgroundImage="none"; }
+  g.style.display="block";
+  moveGhost(ev);
+}
+function moveGhost(ev){
+  if(!drag || drag.type!=="move") return;
+  var g=document.getElementById("ghost");
+  g.style.left=(ev.clientX - drag.w/2)+"px";
+  g.style.top=(ev.clientY - drag.h+8)+"px";
+  var els=document.querySelectorAll(".shelf.dragover,#banco.dragover");
+  for(var i=0;i<els.length;i++) els[i].classList.remove("dragover");
+  var alvo = alvoEm(ev.clientX, ev.clientY);
+  if(alvo && alvo.el) alvo.el.classList.add("dragover");
+}
+function alvoEm(x, y){
+  var g=document.getElementById("ghost"); g.style.display="none";
+  var el = document.elementFromPoint(x, y);
+  g.style.display="block";
+  if(!el) return null;
+  var sh = el.closest(".shelf");
+  if(sh) return {tipo:"shelf", s:parseInt(sh.dataset.shelf), el:sh, x:x};
+  var bc = el.closest("#banco");
+  if(bc) return {tipo:"banco", el:bc};
+  return null;
+}
+function dropAt(ev){
+  if(!drag || drag.type!=="move") return;
+  var alvo = alvoEm(ev.clientX, ev.clientY);
+  document.getElementById("ghost").style.display="none";
+  var els=document.querySelectorAll(".dragover");
+  for(var i=0;i<els.length;i++) els[i].classList.remove("dragover");
+  if(drag.blk) drag.blk.classList.remove("dragging");
+
+  if(!alvo){ drag=null; render(); return; }
+
+  var mov;
+  if(drag.from==="shelf"){ mov = state.shelves[drag.s].splice(drag.i,1)[0]; }
+  else { var it = state.fora.splice(drag.k,1)[0];
+         mov = {ean: it.ean, frentes: 1}; }
+
+  if(alvo.tipo==="banco"){
+    state.fora.push({ean:mov.ean, motivo:"removido manualmente"});
+  } else {
+    var sh = alvo.el;
+    var idx = state.shelves[alvo.s].length;
+    var blocos = sh.querySelectorAll(".blk:not(.dragging)");
+    for(var j=0;j<blocos.length;j++){
+      var r = blocos[j].getBoundingClientRect();
+      if(alvo.x < r.left + r.width/2){ idx = j; break; }
+    }
+    state.shelves[alvo.s].splice(idx, 0, mov);
+  }
+  drag=null; scheduleSend();
+}
+</script>
+</body>
+</html>
