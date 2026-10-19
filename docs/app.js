@@ -832,10 +832,13 @@ function telaBase() {
     h += `<div class="cartao"><h3>2 · Confira antes de gravar<small>${esc(importBase.arquivo)}</small></h3>
       ${queda ? `<div class="aviso laranja" style="margin-bottom:12px">Atenção: o arquivo tem bem menos produtos que a base atual (${r.linhas} contra ${r.atual}). Confira se é o arquivo certo.</div>` : ""}
       ${importBase.faltam.length ? `<div class="aviso laranja" style="margin-bottom:12px">Colunas não encontradas: ${esc(importBase.faltam.join(", "))}.</div>` : ""}
+      ${importBase.semMedida ? '<div class="aviso laranja" style="margin-bottom:12px">A planilha não tem as colunas de medida (largura_cm, altura_cm, profundidade_cm). Ela vale pra listar os ativos sem venda no Banco, mas não completa medida nenhuma.</div>' : ""}
       <div class="passos"><div class="passo"><span>Produtos lidos</span><strong class="num">${r.linhas}</strong><b>hoje na base: ${r.atual}</b></div>
       <div class="passo"><span>Com medida</span><strong class="num">${r.com_dim}</strong><b>largura preenchida</b></div>
       <div class="passo"><span>Novos</span><strong class="num">${r.novos}</strong><b>não estavam na base</b></div>
       <div class="passo"><span>Saíram</span><strong class="num">${r.sairam}</strong><b>somem da base</b></div></div>
+      <p class="nota" style="margin-top:12px"><b>Colunas lidas:</b></p><div class="chips ok">${importBase.lidas.map((c) => `<span>${esc(c)}</span>`).join("")}</div>
+      ${importBase.ignoradas.length ? `<p class="nota" style="margin-top:8px"><b>Colunas ignoradas:</b></p><div class="chips fora">${importBase.ignoradas.map((c) => `<span>${esc(c)}</span>`).join("")}</div>` : ""}
       <p class="nota" style="margin-top:10px">${r.categorias} categorias · ${r.subcategorias} subcategorias · ${importBase.descartadas} linha(s) sem código ou repetidas ficaram de fora.</p>
       <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="btn btn-primario" id="btn-gravar-base">Gravar a base</button><button type="button" class="btn btn-borda" id="btn-cancelar-base">Cancelar</button></div></div>`;
   }
@@ -887,10 +890,11 @@ async function lerBase(arquivo) {
     await wb.xlsx.load(await arquivo.arrayBuffer());
     const ws = wb.worksheets[0];                      // a 1a aba, igual ao pd.read_excel
     if (!ws) throw new Error("O arquivo não tem nenhuma aba.");
-    const pos = {};
+    const pos = {}, lidas = [], ignoradas = [];
     ws.getRow(1).eachCell({ includeEmpty: true }, (c, col) => {
-      const campo = window.Base.campoDaColuna(valorCelula(c.value));
-      if (campo && !(campo in pos)) pos[campo] = col;
+      const nome = String(valorCelula(c.value) ?? "").trim(); if (!nome) return;
+      const campo = window.Base.campoDaColuna(nome);
+      if (campo && !(campo in pos)) { pos[campo] = col; lidas.push(nome); } else ignoradas.push(nome);
     });
     const faltam = ["ean", "codigo_erp", "descricao", "categoria", "subcategoria", "marca"].filter((c) => !pos[c])
       .map((c) => ({ ean: "CodBarra", codigo_erp: "Codigo", descricao: "Descricao", categoria: "Categorias", subcategoria: "SubCategoria", marca: "Marca" }[c]));
@@ -905,7 +909,8 @@ async function lerBase(arquivo) {
     const linhas = window.Base.prepararLinhas(regs);
     if (!linhas.length) throw new Error(MENSAGENS.ARQUIVO_VAZIO);
     const resumo = await rpc("plano_web_base_importar", { p_token: sessao.token, p_linhas: linhas, p_arquivo: arquivo.name, p_gravar: false });
-    importBase = { arquivo: arquivo.name, linhas, resumo, faltam, descartadas: regs.length - linhas.length };
+    const semMedida = !pos.largura_cm && !pos.altura_cm && !pos.profundidade_cm;
+    importBase = { arquivo: arquivo.name, linhas, resumo, faltam, descartadas: regs.length - linhas.length, lidas, ignoradas, semMedida };
     telaBase();
   } catch (e) { toast(e.message, "erro"); }
   finally { carregando(false); }
