@@ -45,6 +45,8 @@ const IC = {
   atualizar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"/></svg>',
   imprimir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   busca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  cadastro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14"/></svg>',
+  camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="4"/></svg>',
   mais: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
 };
 
@@ -154,7 +156,7 @@ const sujo = () => !!(E.plan && E.planBase && estadoPlan() !== E.planBase);
 const estadoPlan = () => JSON.stringify([E.plan.shelves, E.plan.fora]);
 window.addEventListener("beforeunload", (e) => { if (sujo()) { e.preventDefault(); e.returnValue = ""; } });
 
-const PAGINAS = ["plano", "base", "usuarios"];
+const PAGINAS = ["plano", "cadastro", "base", "usuarios"];
 function pagina() { const h = location.hash.replace(/^#\/?/, ""); return PAGINAS.includes(h) ? h : "plano"; }
 window.addEventListener("hashchange", () => { if (sessao) render(); });
 
@@ -194,7 +196,7 @@ function prepararInicio() {
 function montarNav() {
   const pg = pagina();
   const itens = [["plano", "Planograma", IC.plano]];
-  if (ehAdmin()) itens.push(["base", "Base de ativos", IC.base], ["usuarios", "Usuários", IC.usuarios]);
+  if (ehAdmin()) itens.push(["cadastro", "Fila do cadastro", IC.cadastro], ["base", "Base de ativos", IC.base], ["usuarios", "Usuários", IC.usuarios]);
   $("#nav").innerHTML = '<div class="nav-rotulo">Gestão de categoria</div>' +
     itens.map(([id, nome, ic]) => `<button type="button" data-pg="${id}" class="${pg === id ? "ativo" : ""}">${ic}<span>${nome}</span></button>`).join("");
 }
@@ -211,6 +213,9 @@ function render() {
   $("#rotulo-loja").hidden = pg !== "plano";
   montarSeletorLoja();
   if (pg === "usuarios") { $("#pg-titulo").textContent = "Usuários"; $("#pg-sub").textContent = "Quem entra no Planograma e com qual perfil"; telaUsuarios(); return; }
+  if (pg === "cadastro" && render.ultima !== "cadastro") { FILA.dados = {}; E.semCad = null; }   // entrou na tela: busca de novo
+  render.ultima = pg;
+  if (pg === "cadastro") { $("#pg-titulo").textContent = "Fila do cadastro"; $("#pg-sub").textContent = "Produtos com venda que faltam foto, medida ou o próprio cadastro — os que mais vendem primeiro"; telaCadastro(); return; }
   if (pg === "base") { $("#pg-titulo").textContent = "Base de ativos"; $("#pg-sub").textContent = "O produtos.xlsx do ERP: ativos sem venda vão pro Banco e as medidas completam o cadastro"; telaBase(); return; }
   telaPlano();
 }
@@ -597,6 +602,7 @@ function renderAcoes() {
     <button type="button" class="btn btn-borda" id="ac-resetar"${tem ? "" : " disabled"} title="Descarta os arrastos e volta pro arranjo automático">${IC.resetar}Resetar</button>
     <button type="button" class="btn btn-borda" id="ac-atualizar" title="Busca de novo vendas, cadastro e base no Supabase (mantém o arranjo da tela)">${IC.atualizar}Atualizar</button>
     <button type="button" class="btn btn-borda" id="ac-imprimir"${tem ? "" : " disabled"} title="Imprimir ou salvar em PDF">${IC.imprimir}Imprimir</button>
+    ${ehAdmin() ? `<button type="button" class="btn btn-borda" id="ac-novo" title="Cadastra um produto com venda que não aparece por não existir na dim_produtos (ou estar sem categoria)">${IC.mais}Novo item</button>` : ""}
     <span class="estado-plano">${tem ? (E.origem === "salvo" ? "💾 arranjo salvo" : "🟢 arranjo automático") : ""}${s ? ' · <b class="sujo">● alterações não salvas</b>' : ""}</span>`;
   $("#ac-salvar").onclick = salvarPlano;
   $("#ac-desfazer").onclick = () => {
@@ -619,6 +625,7 @@ function renderAcoes() {
     renderPainel(); renderArea(); toast("Dados atualizados do Supabase.", "ok");
   };
   $("#ac-imprimir").onclick = abrirImpressao;
+  if ($("#ac-novo")) $("#ac-novo").onclick = () => abrirNovoItem();
 }
 async function salvarPlano() {
   if (!E.plan) return toast("Nada pra salvar: marque uma categoria ou subcategoria primeiro.");
@@ -721,13 +728,65 @@ function renderResumo() {
 }
 window.addEventListener("resize", () => { if (E.ajusteTela && pagina() === "plano") { clearTimeout(window._rz); window._rz = setTimeout(renderCanvas, 200); } });
 
+// ---------- zona de foto (editor e novo item): escolher, tratar e prever ----------
+function htmlZonaFoto(titulo) {
+  return `<div class="troca-foto">
+      <label class="zona mini" id="zona-foto">${IC.base}<strong>${titulo}</strong><span>clique, arraste ou cole (Ctrl+V) · PNG, JPG ou WEBP</span>
+        <input type="file" id="arq-foto" accept="image/png,image/jpeg,image/webp" hidden></label>
+      <label class="check"><input type="checkbox" id="tratar-foto" checked> Remover fundo e cortar nas bordas</label>
+      <p class="nota" style="margin-top:-4px">Mesmo tratamento do pipeline do Simplus. Desmarque se a foto já estiver recortada com fundo transparente.</p>
+      <div class="prev-foto" id="prev-foto" hidden>
+        <figure><figcaption>Original</figcaption><div class="xadrez"><img id="prev-orig" alt=""></div></figure>
+        <figure><figcaption>Como vai ficar</figcaption><div class="xadrez"><img id="prev-novo" alt=""></div><small id="prev-info" class="nota"></small></figure>
+      </div>
+    </div>`;
+}
+// liga a zona; devolve {foto(): tratada|null}. btn fica travado enquanto trata.
+function ligarZonaFoto(g, btn, aoMudar) {
+  let foto = null, arquivo = null, versao = 0;
+  async function preparar() {
+    if (!arquivo) return;
+    const minha = ++versao;
+    btn.disabled = true; $("#prev-info").textContent = "Tratando a foto…";
+    $("#prev-foto").hidden = false;
+    $("#prev-orig").src = URL.createObjectURL(arquivo);
+    try {
+      const r = await window.Foto.tratar(arquivo, { removerFundo: $("#tratar-foto").checked });
+      if (minha !== versao) return;
+      foto = r;
+      $("#prev-novo").src = URL.createObjectURL(r.blob);
+      $("#prev-info").textContent = `${r.largura} × ${r.altura} px · ${(r.blob.size / 1024).toFixed(0)} KB · ${r.extensao.toUpperCase()}` +
+        ($("#tratar-foto").checked && !r.fundoRemovido ? " · não achei fundo liso pra remover (só cortou)" : "");
+    } catch (e) { foto = null; $("#prev-info").textContent = ""; toast("Não consegui tratar a foto: " + e.message, "erro"); }
+    finally { if (minha === versao) { btn.disabled = false; if (aoMudar) aoMudar(foto); } }
+  }
+  function escolher(f) {
+    if (!f) return;
+    if (!/^image\/(png|jpe?g|webp)$/i.test(f.type)) return toast("Envie uma imagem PNG, JPG ou WEBP.", "erro");
+    arquivo = f; preparar();
+  }
+  const zona = $("#zona-foto"), inp = $("#arq-foto");
+  inp.onchange = () => escolher(inp.files[0]);
+  zona.addEventListener("dragover", (e) => { e.preventDefault(); zona.classList.add("arrastando"); });
+  zona.addEventListener("dragleave", () => zona.classList.remove("arrastando"));
+  zona.addEventListener("drop", (e) => { e.preventDefault(); zona.classList.remove("arrastando"); escolher(e.dataTransfer.files[0]); });
+  g.onpaste = (e) => { const it = [...(e.clipboardData?.items || [])].find((x) => x.type.startsWith("image/")); if (it) { e.preventDefault(); escolher(it.getAsFile()); } };
+  $("#tratar-foto").onchange = preparar;
+  return { foto: () => foto };
+}
+// produto mudou (medida/foto): reflete no plano aberto, nos recortes baixados e onde mais pedirem
+function refletirProduto(ean, campos) {
+  if (E.prodInfo[ean]) Object.assign(E.prodInfo[ean], campos);
+  Object.keys(E.cache).forEach((k) => { const c = E.cache[k]; [c.recorte, c.catExtra].forEach((l) => l.forEach((x) => { if (x.ean === ean) Object.assign(x, campos); })); });
+}
+
 // ---------- editor de medidas e foto (dois cliques, só admin) ----------
-function abrirEditor(ean) {
+// opc.produto: produto que não está no plano aberto (fila do cadastro); opc.aoSalvar(campos)
+function abrirEditor(ean, opc = {}) {
   if (!ehAdmin()) return;
-  const p = E.prodInfo[ean] || {};
+  const p = opc.produto || E.prodInfo[ean] || {};
   const v = (x) => (x == null || isNaN(x) ? "" : String(x));
   const g = $("#gaveta");
-  let foto = null, arquivoFoto = null, versao = 0;          // foto tratada pronta pra subir
   g.innerHTML = `<header><div><h3>${esc(p.descricao || ean)}</h3><p>EAN ${esc(ean)}${p.marca ? " · " + esc(p.marca) : ""}${p.codigo_erp ? " · Cód ERP " + esc(p.codigo_erp) : ""}</p></div>
       <button type="button" class="btn-fechar" data-fechar aria-label="Fechar">×</button></header>
     <form class="corpo" id="form-medidas" autocomplete="off">
@@ -737,74 +796,41 @@ function abrirEditor(ean) {
         <label class="campo"><span>Altura (cm)</span><input name="a" type="number" min="0" max="500" step="0.1" value="${v(p.altura_cm)}"></label>
         <label class="campo"><span>Profundidade (cm)</span><input name="p" type="number" min="0" max="500" step="0.1" value="${v(p.profundidade_cm)}"></label>
       </div>
-      <div class="troca-foto">
-        <label class="zona mini" id="zona-foto">${IC.base}<strong>Trocar a foto (opcional)</strong><span>clique, arraste ou cole (Ctrl+V) · PNG, JPG ou WEBP</span>
-          <input type="file" id="arq-foto" accept="image/png,image/jpeg,image/webp" hidden></label>
-        <label class="check"><input type="checkbox" id="tratar-foto" checked> Remover fundo e cortar nas bordas</label>
-        <p class="nota" style="margin-top:-4px">Mesmo tratamento do pipeline do Simplus. Desmarque se a foto já estiver recortada com fundo transparente.</p>
-        <div class="prev-foto" id="prev-foto" hidden>
-          <figure><figcaption>Original</figcaption><div class="xadrez"><img id="prev-orig" alt=""></div></figure>
-          <figure><figcaption>Como vai ficar</figcaption><div class="xadrez"><img id="prev-novo" alt=""></div><small id="prev-info" class="nota"></small></figure>
-        </div>
-      </div>
+      ${htmlZonaFoto(p.foto_url ? "Trocar a foto (opcional)" : "Enviar a foto (opcional)")}
       <p class="nota">Grava direto na <b>dim_produtos</b> e no bucket de fotos (vale pro Streamlit também). Produto que veio só da base de ativos ganha a linha no cadastro.</p>
     </form>
     <footer><button type="submit" form="form-medidas" class="btn btn-primario" id="btn-medidas">💾 Salvar</button><button type="button" class="btn btn-borda" data-fechar>Cancelar</button></footer>`;
   g.hidden = false; $("#veu").hidden = false;
   $$("[data-fechar]", g).forEach((b) => b.onclick = fecharGaveta);
   $('[name="l"]', g).focus();
-
-  async function preparar() {
-    if (!arquivoFoto) return;
-    const minha = ++versao, btn = $("#btn-medidas");
-    btn.disabled = true; $("#prev-info").textContent = "Tratando a foto…";
-    $("#prev-foto").hidden = false;
-    $("#prev-orig").src = URL.createObjectURL(arquivoFoto);
-    try {
-      const r = await window.Foto.tratar(arquivoFoto, { removerFundo: $("#tratar-foto").checked });
-      if (minha !== versao) return;
-      foto = r;
-      $("#prev-novo").src = URL.createObjectURL(r.blob);
-      $("#prev-info").textContent = `${r.largura} × ${r.altura} px · ${(r.blob.size / 1024).toFixed(0)} KB · ${r.extensao.toUpperCase()}` +
-        ($("#tratar-foto").checked && !r.fundoRemovido ? " · não achei fundo liso pra remover (só cortou)" : "");
-    } catch (e) { foto = null; $("#prev-info").textContent = ""; toast("Não consegui tratar a foto: " + e.message, "erro"); }
-    finally { if (minha === versao) btn.disabled = false; }
-  }
-  function escolher(f) {
-    if (!f) return;
-    if (!/^image\/(png|jpe?g|webp)$/i.test(f.type)) return toast("Envie uma imagem PNG, JPG ou WEBP.", "erro");
-    arquivoFoto = f; preparar();
-  }
-  const zona = $("#zona-foto"), inp = $("#arq-foto");
-  inp.onchange = () => escolher(inp.files[0]);
-  zona.addEventListener("dragover", (e) => { e.preventDefault(); zona.classList.add("arrastando"); });
-  zona.addEventListener("dragleave", () => zona.classList.remove("arrastando"));
-  zona.addEventListener("drop", (e) => { e.preventDefault(); zona.classList.remove("arrastando"); escolher(e.dataTransfer.files[0]); });
-  g.onpaste = (e) => { const it = [...(e.clipboardData?.items || [])].find((x) => x.type.startsWith("image/")); if (it) { e.preventDefault(); escolher(it.getAsFile()); } };
-  $("#tratar-foto").onchange = preparar;
+  const zf = ligarZonaFoto(g, $("#btn-medidas"));
 
   $("#form-medidas").onsubmit = async (ev) => {
     ev.preventDefault();
     const f = ev.target, n = (k) => { const x = parseFloat(String(f.elements[k].value).replace(",", ".")); return x > 0 ? x : null; };
     const novo = { largura_cm: n("l"), altura_cm: n("a"), profundidade_cm: n("p") };
+    const foto = zf.foto();
     // como no Streamlit: só regrava a medida (e marca fonte "manual") se ela mudou
     const mudouDim = Object.keys(novo).some((k) => { const a = p[k] == null || isNaN(p[k]) ? null : Number(p[k]); return (novo[k] == null) !== (a == null) || (novo[k] != null && Math.abs(novo[k] - a) > 0.001); });
     if (!mudouDim && !foto) { fecharGaveta(); return; }
     const btn = $("#btn-medidas"); btn.disabled = true; btn.textContent = "Gravando…";
-    const info = E.prodInfo[ean] || (E.prodInfo[ean] = {});
     const produto = { descricao: p.descricao, marca: p.marca, categoria: p.categoria, subcategoria: p.subcategoria, codigo_erp: p.codigo_erp };
+    const campos = {};
     try {
       if (mudouDim) {
         const r = await rpc("plano_web_produto_medidas", { p_token: sessao.token, p: { ean, ...novo, ...produto } });
-        info.largura_cm = num(r.largura_cm); info.altura_cm = num(r.altura_cm); info.profundidade_cm = num(r.profundidade_cm);
+        Object.assign(campos, { largura_cm: num(r.largura_cm), altura_cm: num(r.altura_cm), profundidade_cm: num(r.profundidade_cm) });
       }
       if (foto) {
         btn.textContent = "Enviando a foto…";
         const r = await enviarFoto(ean, foto, produto);
-        info.foto_url = r.foto_url;
+        campos.foto_url = r.foto_url;
       }
-      Object.keys(E.cache).forEach((k) => { const c = E.cache[k]; [c.recorte, c.catExtra].forEach((l) => l.forEach((x) => { if (x.ean === ean) Object.assign(x, { largura_cm: info.largura_cm, altura_cm: info.altura_cm, profundidade_cm: info.profundidade_cm, foto_url: info.foto_url || x.foto_url }); })); });
-      fecharGaveta(); renderArea();
+      refletirProduto(ean, campos);
+      if (opc.produto) Object.assign(opc.produto, campos);
+      fecharGaveta();
+      if (pagina() === "plano") renderArea();
+      if (opc.aoSalvar) opc.aoSalvar(campos);
       toast(foto && mudouDim ? "Medidas e foto salvas." : foto ? "Foto salva." : "Medidas salvas.", "ok");
     } catch (e) { toast(e.message, "erro"); btn.disabled = false; btn.textContent = "💾 Salvar"; }
   };
@@ -834,7 +860,11 @@ document.addEventListener("keydown", (e) => {
   }
 });
 function abrirJanela(html) { const j = $("#janela"); j.innerHTML = html; j.hidden = false; $("#veu-janela").hidden = false; }
-function fecharJanela() { $("#janela").hidden = true; $("#veu-janela").hidden = true; }
+let aoFecharJanela = null;   // a câmera desliga quando a janela fecha (Esc, clique fora)
+function fecharJanela() {
+  $("#janela").hidden = true; $("#veu-janela").hidden = true;
+  const f = aoFecharJanela; aoFecharJanela = null; if (f) f();
+}
 $("#veu-janela").addEventListener("click", fecharJanela);
 
 // ---------- impressão / PDF (v7.10) ----------
@@ -995,6 +1025,377 @@ async function gravarBase() {
     telaBase();
   } catch (e) { toast(e.message, "erro"); btn.disabled = false; btn.textContent = "Gravar a base"; }
   finally { carregando(false); }
+}
+
+// ============================================================
+// CADASTRAR NOVO ITEM (dialog_novo do Streamlit) - só admin
+// ============================================================
+const NOVA = "__nova__";
+const eanValido = (c) => /^\d{6,14}$/.test(String(c || ""));
+const reais = (v) => "R$ " + Number(v || 0).toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+async function carregarSemCadastro(forcar) {
+  if (!E.semCad || forcar) E.semCad = await rpc("plano_web_sem_cadastro", { p_token: sessao.token });
+  return E.semCad;
+}
+function catalogoCats() {   // categoria -> Set(subcategorias), de todas as lojas (igual ao opcoes_df)
+  const m = {};
+  (E.inicio.opcoes || []).forEach((o) => { if (o[1] != null) { m[o[1]] ||= new Set(); if (o[2] != null) m[o[1]].add(o[2]); } });
+  return m;
+}
+function abrirNovoItem(eanInicial, opc = {}) {
+  if (!ehAdmin()) return;
+  const g = $("#gaveta"), cats = catalogoCats(), listaCats = Object.keys(cats).sort(cmpTxt);
+  const opcoes = (l) => l.map((x) => `<option>${esc(x)}</option>`).join("") + `<option value="${NOVA}">— nova (digitar) —</option>`;
+  g.innerHTML = `<header><div><h3>➕ Cadastrar novo item</h3><p>Pra produto com venda que não aparece no quadro por não existir na dim_produtos (ou estar sem categoria)</p></div>
+      <button type="button" class="btn-fechar" data-fechar aria-label="Fechar">×</button></header>
+    <form class="corpo" id="form-novo" autocomplete="off">
+      <label class="campo"><span>Com venda e sem cadastro <small id="nv-conta"></small></span><select id="nv-lista"><option value="">Carregando…</option></select></label>
+      <div class="ean-linha">
+        <label class="campo"><span>EAN / código interno *</span><input id="nv-ean" inputmode="numeric" maxlength="14" placeholder="só números"></label>
+        <button type="button" class="btn btn-borda" id="nv-camera">${IC.camera}Ler com a câmera</button>
+      </div>
+      <div id="nv-info"><p class="nota">Escolha na lista, leia com a câmera ou digite o código.</p></div>
+      <fieldset class="nv-dados" id="nv-dados" disabled>
+        <label class="campo"><span>Descrição *</span><input name="desc" maxlength="200"></label>
+        <div class="linha2">
+          <label class="campo"><span>Marca</span><input name="marca" maxlength="80"></label>
+          <label class="campo"><span>Código ERP</span><input name="erp" maxlength="30"></label>
+        </div>
+        <label class="campo"><span>Categoria *</span><select name="cat"><option value="">Selecione…</option>${opcoes(listaCats)}</select></label>
+        <label class="campo" id="nv-cat-nova" hidden><span>Nova categoria *</span><input name="catNova" maxlength="80"></label>
+        <label class="campo"><span>Subcategoria *</span><select name="sub"><option value="">Selecione…</option></select></label>
+        <label class="campo" id="nv-sub-nova" hidden><span>Nova subcategoria *</span><input name="subNova" maxlength="80"></label>
+        <div class="linha3">
+          <label class="campo"><span>Largura (cm)</span><input name="l" type="number" min="0" max="500" step="0.1"></label>
+          <label class="campo"><span>Altura (cm)</span><input name="a" type="number" min="0" max="500" step="0.1"></label>
+          <label class="campo"><span>Profundidade (cm)</span><input name="p" type="number" min="0" max="500" step="0.1"></label>
+        </div>
+        <p class="nota" style="margin-top:-4px">Sem medida o item vai pro Banco como “sem dimensão” (dá pra medir depois com dois cliques).</p>
+        ${htmlZonaFoto("Foto do produto (opcional)")}
+        <div class="nv-cosmos" id="nv-cosmos" hidden><img id="nv-cosmos-img" alt="foto do Cosmos">
+          <div><b>Achei a foto no Cosmos</b><label class="check"><input type="checkbox" id="nv-usar-cosmos" checked> Usar essa foto do Cosmos</label>
+          <p class="nota">Vale só se você não enviar uma foto própria.</p></div></div>
+      </fieldset>
+    </form>
+    <footer><button type="submit" form="form-novo" class="btn btn-primario" id="btn-novo" disabled>💾 Cadastrar</button><button type="button" class="btn btn-borda" data-fechar>Cancelar</button></footer>`;
+  g.hidden = false; $("#veu").hidden = false;
+  $$("[data-fechar]", g).forEach((b) => b.onclick = fecharGaveta);
+  const f = $("#form-novo"), el = f.elements, inpEan = $("#nv-ean"), btn = $("#btn-novo");
+  let achado = null, consulta = 0, cosmosOk = false;
+  const zf = ligarZonaFoto(g, btn, (foto) => { $("#nv-cosmos").hidden = !!foto || !cosmosOk; });
+
+  // ---- lista dos com venda e sem cadastro ----
+  carregarSemCadastro().then((l) => {
+    const sel = $("#nv-lista"); if (!sel) return;
+    $("#nv-conta").textContent = `(${l.length}${l.length >= 500 ? "+" : ""})`;
+    sel.innerHTML = '<option value="">— escolher —</option>' + l.map((x) => `<option value="${esc(x.ean)}">${esc(x.ean)}  (venda ${esc(reais(x.venda))})${x.base ? " · " + esc(x.base.descricao || "") : ""}</option>`).join("");
+    if (inpEan.value) sel.value = inpEan.value;
+  }).catch((e) => { const sel = $("#nv-lista"); if (sel) sel.innerHTML = `<option value="">${esc(e.message)}</option>`; });
+  $("#nv-lista").onchange = (e) => { if (e.target.value) { inpEan.value = e.target.value; buscar(); } };
+
+  // ---- categoria / subcategoria (com "nova") ----
+  function pegarOpcao(sel, valor) {   // casa sem ligar pra maiúscula/acento; senão vira "nova"
+    if (!valor) { sel.value = ""; return false; }
+    const o = [...sel.options].find((x) => x.value !== NOVA && x.value && semAcento(x.value) === semAcento(valor));
+    sel.value = o ? o.value : NOVA;
+    return !o;
+  }
+  function trocouCat() {
+    const c = el.cat.value, subs = c && c !== NOVA ? [...(cats[c] || [])].sort(cmpTxt) : [];
+    $("#nv-cat-nova").hidden = c !== NOVA;
+    el.sub.innerHTML = '<option value="">Selecione…</option>' + opcoes(subs);
+    if (c === NOVA) el.sub.value = NOVA;
+    trocouSub();
+  }
+  function trocouSub() { $("#nv-sub-nova").hidden = el.sub.value !== NOVA; }
+  el.cat.onchange = trocouCat; el.sub.onchange = trocouSub;
+  function preencher(src) {
+    const v = (x) => (x == null || x === "" || isNaN(Number(x)) || Number(x) <= 0 ? "" : String(Number(x)));
+    el.desc.value = src.descricao || ""; el.marca.value = src.marca || ""; el.erp.value = src.codigo_erp || "";
+    el.l.value = v(src.largura_cm); el.a.value = v(src.altura_cm); el.p.value = v(src.profundidade_cm);
+    el.catNova.value = pegarOpcao(el.cat, src.categoria) ? src.categoria : "";
+    trocouCat();
+    el.subNova.value = pegarOpcao(el.sub, src.subcategoria) ? src.subcategoria : "";
+    trocouSub();
+  }
+
+  // ---- foto do Cosmos (só se carregar de verdade) ----
+  function testarCosmos(ean, temFoto) {
+    cosmosOk = false; $("#nv-cosmos").hidden = true;
+    const im = new Image(), minha = consulta;
+    im.onload = () => {
+      if (minha !== consulta || im.naturalWidth < 20) return;
+      cosmosOk = true; $("#nv-cosmos-img").src = im.src; $("#nv-usar-cosmos").checked = !temFoto;
+      $("#nv-cosmos").hidden = !!zf.foto();
+    };
+    im.src = `https://cdn-cosmos.bluesoft.com.br/products/${ean}`;
+  }
+
+  // ---- o EAN já existe? o que a base de ativos sabe dele? ----
+  let tmr = null;
+  inpEan.addEventListener("input", () => {
+    const limpo = inpEan.value.replace(/\D/g, "").slice(0, 14);
+    if (limpo !== inpEan.value) inpEan.value = limpo;
+    clearTimeout(tmr); tmr = setTimeout(buscar, 400);
+  });
+  async function buscar() {
+    clearTimeout(tmr);
+    const ean = inpEan.value.trim(), minha = ++consulta, info = $("#nv-info");
+    achado = null; cosmosOk = false; $("#nv-cosmos").hidden = true;
+    if ($("#nv-lista").value !== ean) $("#nv-lista").value = [...$("#nv-lista").options].some((o) => o.value === ean) ? ean : "";
+    if (!eanValido(ean)) {
+      $("#nv-dados").disabled = true; btn.disabled = true;
+      info.innerHTML = `<p class="nota">${ean ? "O código precisa ter de 6 a 14 números." : "Escolha na lista, leia com a câmera ou digite o código."}</p>`;
+      return;
+    }
+    info.innerHTML = '<p class="nota">Procurando o código…</p>';
+    let r;
+    try { r = await rpc("plano_web_produto_buscar", { p_token: sessao.token, p_ean: ean }); }
+    catch (e) { if (minha === consulta) info.innerHTML = `<p class="erro">${esc(e.message)}</p>`; return; }
+    if (minha !== consulta) return;
+    achado = r;
+    const vd = r.venda && r.venda.venda != null ? `<p class="nota">💰 Venda: <b>${esc(reais(r.venda.venda))}</b> · ${esc(String(Math.round(r.venda.qtde || 0)))} un · loja(s) ${esc(r.venda.lojas || "")}</p>` : '<p class="nota">Sem venda registrada nesse código — dá pra cadastrar mesmo assim.</p>';
+    if (r.cadastro) {
+      info.innerHTML = `<div class="aviso laranja"><div>Esse EAN já existe no cadastro${r.cadastro.ean !== ean ? ` (como <b>${esc(r.cadastro.ean)}</b>)` : ""}: <b>${esc(r.cadastro.descricao || r.cadastro.ean)}</b>. Salvar aqui <b>SOBRESCREVE</b> — pra ajuste pontual de medida ou foto, prefira o editor.
+        <div style="margin-top:8px"><button type="button" class="btn btn-borda mini" id="nv-editor">Abrir no editor</button></div></div></div>${vd}`;
+      $("#nv-editor").onclick = () => { const c = { ...r.cadastro }; abrirEditor(c.ean, { produto: c, aoSalvar: opc.aoSalvar }); };
+      preencher(r.cadastro);
+    } else if (r.base) {
+      info.innerHTML = `<p class="nota ok-txt">✔ Achei na base de ativos (produtos.xlsx) — preenchi com o que ela tem; confira.</p>${vd}`;
+      preencher(r.base);
+    } else {
+      info.innerHTML = vd;
+      preencher({});
+    }
+    $("#nv-dados").disabled = false; btn.disabled = false;
+    testarCosmos(ean, !!(r.cadastro && r.cadastro.foto_url));
+    (r.cadastro || r.base ? el.l : el.desc).focus();
+  }
+
+  // ---- câmera ----
+  $("#nv-camera").onclick = async () => {
+    const cod = await lerCodigoCamera();
+    if (cod) { inpEan.value = cod; toast("Código lido: " + cod, "ok"); buscar(); }
+  };
+
+  // ---- cadastrar ----
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const ean = inpEan.value.trim();
+    if (!eanValido(ean) || !achado) return;
+    const categoria = (el.cat.value === NOVA ? el.catNova.value : el.cat.value).trim();
+    const subcategoria = (el.sub.value === NOVA ? el.subNova.value : el.sub.value).trim();
+    const descricao = el.desc.value.trim();
+    if (!descricao || !categoria || !subcategoria) return toast("Preencha descrição, categoria e subcategoria.", "erro");
+    if (achado.cadastro && achado.cadastro.ean === ean && !confirm(`O EAN ${ean} já está cadastrado como "${achado.cadastro.descricao || ean}". Sobrescrever?`)) return;
+    const n = (k) => { const x = parseFloat(String(el[k].value).replace(",", ".")); return x > 0 ? x : null; };
+    const foto = zf.foto();
+    const p = { ean, descricao, marca: el.marca.value.trim(), categoria, subcategoria, codigo_erp: el.erp.value.trim(),
+      largura_cm: n("l"), altura_cm: n("a"), profundidade_cm: n("p"), foto_cosmos: !foto && cosmosOk && $("#nv-usar-cosmos").checked };
+    btn.disabled = true; btn.textContent = "Gravando…";
+    try {
+      const prod = await rpc("plano_web_produto_cadastrar", { p_token: sessao.token, p });
+      if (foto) {
+        btn.textContent = "Enviando a foto…";
+        try { prod.foto_url = (await enviarFoto(ean, foto, prod)).foto_url; }
+        catch (e) { toast("Produto cadastrado, mas a foto não subiu: " + e.message, "erro"); }
+      }
+      if (E.semCad) E.semCad = E.semCad.filter((x) => x.ean !== ean);
+      const pertence = integrarNovoNoPlano(prod, achado.venda);
+      E.cache = {};
+      fecharGaveta();
+      if (pagina() === "plano") renderArea();
+      if (opc.aoSalvar) opc.aoSalvar(prod);
+      if (!foto || prod.foto_url) toast(pertence ? `${descricao} cadastrado — está no Banco.` : `${descricao} cadastrado — aparece ao abrir “${E.nivel === "Categoria" ? categoria : subcategoria}”.`, "ok");
+      // categoria/subcategoria nova passa a aparecer no painel
+      rpc("plano_web_inicio", { p_token: sessao.token }).then((ini) => { E.inicio = ini; prepararInicio(); if (pagina() === "plano" && $("#painel")) renderPainel(); }).catch(() => {});
+    } catch (e) { toast(e.message, "erro"); btn.disabled = false; btn.textContent = "💾 Cadastrar"; }
+  };
+
+  if (eanInicial) { inpEan.value = String(eanInicial); buscar(); } else inpEan.focus();
+}
+// se é do recorte aberto, já aparece no Banco sem perder as edições não salvas do arranjo
+function integrarNovoNoPlano(prod, venda) {
+  const campos = { descricao: prod.descricao || prod.ean, marca: prod.marca || "", foto_url: prod.foto_url || "", largura_cm: num(prod.largura_cm),
+    altura_cm: num(prod.altura_cm), profundidade_cm: num(prod.profundidade_cm), codigo_erp: prod.codigo_erp || "", categoria: prod.categoria || "",
+    subcategoria: prod.subcategoria || "" };
+  refletirProduto(prod.ean, campos);
+  if (!E.plan) return false;
+  const valor = colNivel() === "categoria" ? prod.categoria : prod.subcategoria;
+  if (!escolhasAtuais().includes(valor)) return false;
+  if (!E.prodInfo[prod.ean]) {
+    const q = Number(venda?.qtde) || 0;
+    E.prodInfo[prod.ean] = { ...campos, preco_medio: q ? Number(venda.venda) / q : 0 };
+  }
+  const presentes = new Set(E.plan.shelves.flat().map((e) => e.ean).concat(E.plan.fora.map((i) => i.ean)));
+  const noBanco = E.plan.fora.find((i) => i.ean === prod.ean);
+  if (noBanco && noBanco.motivo === "sem venda (catalogo)") noBanco.motivo = "novo cadastro";   // vinha só da base de ativos
+  else if (!presentes.has(prod.ean)) {
+    E.hist.push(estadoPlan()); E.hist = E.hist.slice(-30);
+    E.plan.fora.push({ ean: prod.ean, motivo: "novo cadastro" });
+  }
+  return true;
+}
+
+// ---------- leitor de código de barras pela câmera ----------
+// BarcodeDetector nativo (Chrome no Android/Mac) ou ZXing (iPhone, Windows, Firefox)
+const ZXING_URL = "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js";
+let zxingPromessa = null;
+function carregarZXing() {
+  if (window.ZXingBrowser) return Promise.resolve(window.ZXingBrowser);
+  zxingPromessa ||= new Promise((ok, falha) => {
+    const s = document.createElement("script");
+    s.src = ZXING_URL;
+    s.onload = () => ok(window.ZXingBrowser);
+    s.onerror = () => { zxingPromessa = null; falha(new Error("Não consegui carregar o leitor de código. Confira a internet.")); };
+    document.head.appendChild(s);
+  });
+  return zxingPromessa;
+}
+function lerCodigoCamera() {
+  return new Promise((ok) => {
+    let parar = () => {}, fim = false;
+    abrirJanela(`<h3>📷 Ler código de barras</h3>
+      <div class="leitor"><video id="cam" playsinline muted autoplay></video><i class="mira"></i></div>
+      <p class="nota" id="cam-msg">Abrindo a câmera…</p>
+      <div class="acoes"><button type="button" class="btn btn-borda" id="cam-fechar">Cancelar</button></div>`);
+    aoFecharJanela = () => { if (!fim) { fim = true; parar(); ok(null); } };
+    const terminar = (cod) => { if (fim) return; fim = true; parar(); aoFecharJanela = null; fecharJanela(); ok(cod); };
+    $("#cam-fechar").onclick = () => terminar(null);
+    const video = $("#cam"), msg = $("#cam-msg");
+    const restr = { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+    (async () => {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("Este navegador não libera a câmera aqui — digite o código.");
+      let formatos = [];
+      if ("BarcodeDetector" in window) { try { formatos = await window.BarcodeDetector.getSupportedFormats(); } catch {} }
+      const quero = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "itf"].filter((x) => formatos.includes(x));
+      if (quero.length) {
+        const stream = await navigator.mediaDevices.getUserMedia(restr);
+        parar = () => stream.getTracks().forEach((t) => t.stop());
+        if (fim) return parar();
+        video.srcObject = stream; await video.play().catch(() => {});
+        msg.textContent = "Aponte para o código de barras, bem de perto e com luz.";
+        const det = new window.BarcodeDetector({ formats: quero });
+        const laco = async () => {
+          if (fim) return;
+          try { const r = await det.detect(video); const c = r.map((x) => x.rawValue).find(eanValido); if (c) return terminar(c); } catch {}
+          setTimeout(laco, 120);
+        };
+        laco();
+      } else {
+        msg.textContent = "Carregando o leitor…";
+        const ZX = await carregarZXing();
+        if (fim) return;
+        const leitor = new ZX.BrowserMultiFormatOneDReader();
+        const ctrl = await leitor.decodeFromConstraints(restr, video, (res) => { if (res && eanValido(res.getText())) terminar(res.getText()); });
+        parar = () => { try { ctrl.stop(); } catch {} };
+        if (fim) return parar();
+        msg.textContent = "Aponte para o código de barras, bem de perto e com luz.";
+      }
+    })().catch((e) => {
+      if (fim) return;
+      msg.classList.add("erro");
+      msg.textContent = e && (e.name === "NotAllowedError" || e.name === "SecurityError") ? "A câmera foi bloqueada. Libere o acesso à câmera no navegador (cadeado ao lado do endereço) ou digite o código."
+        : e && e.name === "NotFoundError" ? "Não achei câmera neste aparelho — digite o código." : (e?.message || "Não consegui abrir a câmera.");
+    });
+  });
+}
+
+// ============================================================
+// TELA: FILA DO CADASTRO (sem foto / sem medida / sem cadastro)
+// ============================================================
+const FILA = { aba: lerLocal("plano_web_fila_aba") || "falta", loja: "", tipo: "tudo", cat: "", busca: "", limite: 150, dados: {}, buscaSem: "" };
+async function telaCadastro() {
+  if (!ehAdmin()) { $("#conteudo").innerHTML = '<div class="cartao"><p class="erro">Só o Administrador cuida do cadastro.</p></div>'; return; }
+  $("#conteudo").innerHTML = `<div class="pagina"><div class="cartao">
+      <div class="fila-topo"><div class="seg fila-abas">
+        <button type="button" data-faba="falta" class="${FILA.aba === "falta" ? "on" : ""}">📷 Sem foto / sem medida</button>
+        <button type="button" data-faba="sem" class="${FILA.aba === "sem" ? "on" : ""}">🆕 Sem cadastro</button></div>
+        <button type="button" class="btn btn-primario" id="fila-novo">${IC.mais}Novo item</button></div>
+      <div id="fila-corpo"><p class="nota">Carregando…</p></div></div></div>`;
+  $$("[data-faba]").forEach((b) => b.onclick = () => { FILA.aba = b.dataset.faba; gravarLocal("plano_web_fila_aba", FILA.aba); FILA.limite = 150; telaCadastro(); });
+  $("#fila-novo").onclick = () => abrirNovoItem(null, { aoSalvar: () => { FILA.dados = {}; telaCadastro(); } });
+  if (FILA.aba === "sem") return renderSemCad();
+  renderFalta();
+}
+const faltaFoto = (x) => !x.foto_url;
+const faltaMedida = (x) => x.largura_cm == null || x.altura_cm == null;
+async function renderFalta() {
+  const corpo = $("#fila-corpo"), k = FILA.loja || "*";
+  if (!FILA.dados[k]) {
+    try { FILA.dados[k] = await rpc("plano_web_fila", { p_token: sessao.token, p_loja: FILA.loja || null }); }
+    catch (e) { corpo.innerHTML = `<p class="erro">${esc(e.message)}</p>`; return; }
+    if (pagina() !== "cadastro" || FILA.aba !== "falta") return;
+  }
+  const d = FILA.dados[k], itens = d.itens;
+  const cats = [...new Set(itens.map((x) => x.categoria).filter(Boolean))].sort(cmpTxt);
+  if (FILA.cat && !cats.includes(FILA.cat)) FILA.cat = "";
+  corpo.innerHTML = `<div class="fila-filtros">
+      <label class="campo"><span>Loja</span><select id="ff-loja"><option value="">Todas as lojas</option>${(E.lojas || []).map((l) => `<option value="${esc(l)}"${l === FILA.loja ? " selected" : ""}>${esc(nomeLoja(l))}</option>`).join("")}</select></label>
+      <label class="campo"><span>Categoria</span><select id="ff-cat"><option value="">Todas</option>${cats.map((c) => `<option${c === FILA.cat ? " selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
+      <label class="campo"><span>Falta</span><div class="seg seg3">${[["tudo", "Tudo"], ["foto", "Foto"], ["medida", "Medida"]].map(([v, t]) => `<button type="button" data-ftipo="${v}" class="${FILA.tipo === v ? "on" : ""}">${t}</button>`).join("")}</div></label>
+      <label class="campo"><span>Procurar</span><input id="ff-busca" type="search" placeholder="descrição, marca ou EAN" value="${esc(FILA.busca)}"></label>
+    </div>
+    <div id="ff-resumo" class="chips-rec"></div>
+    <div class="tabela-wrap"><table class="simples fila"><thead><tr><th></th><th>Produto</th><th>Categoria</th><th class="num">Venda</th><th>Falta</th><th></th></tr></thead><tbody id="ff-linhas"></tbody></table></div>
+    <div id="ff-mais"></div>`;
+  $("#ff-loja").onchange = (e) => { FILA.loja = e.target.value; FILA.limite = 150; corpo.innerHTML = '<p class="nota">Carregando…</p>'; renderFalta(); };
+  $("#ff-cat").onchange = (e) => { FILA.cat = e.target.value; FILA.limite = 150; linhasFalta(); };
+  $$("[data-ftipo]", corpo).forEach((b) => b.onclick = () => { FILA.tipo = b.dataset.ftipo; FILA.limite = 150; $$("[data-ftipo]", corpo).forEach((x) => x.classList.toggle("on", x === b)); linhasFalta(); });
+  $("#ff-busca").oninput = (e) => { FILA.busca = e.target.value; FILA.limite = 150; linhasFalta(); };
+  linhasFalta();
+}
+function linhasFalta() {
+  const d = FILA.dados[FILA.loja || "*"]; if (!d || !$("#ff-linhas")) return;
+  const b = semAcento(FILA.busca);
+  const pend = d.itens.filter((x) => faltaFoto(x) || faltaMedida(x));
+  const vis = pend.filter((x) => (!FILA.cat || x.categoria === FILA.cat)
+    && (FILA.tipo === "tudo" || (FILA.tipo === "foto" ? faltaFoto(x) : faltaMedida(x)))
+    && (!b || semAcento([x.descricao, x.marca, x.ean, x.codigo_erp].join(" ")).includes(b)));
+  const nFoto = pend.filter(faltaFoto).length, nMed = pend.filter(faltaMedida).length;
+  $("#ff-resumo").innerHTML = `<span class="chip-rec">📷 ${nFoto} sem foto</span><span class="chip-rec">📐 ${nMed} sem medida</span>` +
+    (d.sem_cadastro ? `<button type="button" class="chip-rec chip-link" id="ff-ir-sem">🆕 ${d.sem_cadastro} com venda e sem cadastro →</button>` : "") +
+    `<span class="nota">${vis.length === pend.length ? "" : vis.length + " no filtro · "}os que mais vendem primeiro${d.itens.length >= 1500 ? " (top 1500)" : ""}</span>`;
+  const ir = $("#ff-ir-sem"); if (ir) ir.onclick = () => { FILA.aba = "sem"; gravarLocal("plano_web_fila_aba", "sem"); telaCadastro(); };
+  const mostra = vis.slice(0, FILA.limite);
+  $("#ff-linhas").innerHTML = mostra.length ? mostra.map((x) => `<tr>
+      <td class="mini-foto">${x.foto_url ? `<img src="${esc(x.foto_url)}" alt="" loading="lazy">` : "<span>—</span>"}</td>
+      <td><b>${esc(x.descricao || x.ean)}</b><small>EAN ${esc(x.ean)}${x.marca ? " · " + esc(x.marca) : ""}${x.codigo_erp ? " · ERP " + esc(x.codigo_erp) : ""}</small></td>
+      <td>${esc(x.categoria || "-")}<small>${esc(x.subcategoria || "")}</small></td>
+      <td class="num">${esc(reais(x.venda))}<small>${x.lojas > 1 ? x.lojas + " lojas" : ""}</small></td>
+      <td>${faltaFoto(x) ? '<span class="badge b-falta">foto</span> ' : ""}${faltaMedida(x) ? '<span class="badge b-falta">medida</span>' : ""}</td>
+      <td><button type="button" class="btn btn-borda mini" data-fed="${esc(x.ean)}">Editar</button></td></tr>`).join("")
+    : `<tr><td colspan="6" class="nota">${pend.length ? "Nada nesse filtro." : "🎉 Tudo com foto e medida por aqui."}</td></tr>`;
+  $("#ff-mais").innerHTML = vis.length > mostra.length ? `<button type="button" class="btn btn-borda" id="ff-mais-btn">Mostrar mais (${vis.length - mostra.length})</button>` : "";
+  const mb = $("#ff-mais-btn"); if (mb) mb.onclick = () => { FILA.limite += 150; linhasFalta(); };
+  $$("[data-fed]").forEach((bt) => bt.onclick = () => {
+    const it = d.itens.find((x) => x.ean === bt.dataset.fed);
+    abrirEditor(it.ean, { produto: it, aoSalvar: () => { Object.values(FILA.dados).forEach((dd) => dd !== d && dd.itens.forEach((y) => { if (y.ean === it.ean) Object.assign(y, it); })); linhasFalta(); } });
+  });
+}
+async function renderSemCad() {
+  const corpo = $("#fila-corpo");
+  let l;
+  try { l = await carregarSemCadastro(); } catch (e) { corpo.innerHTML = `<p class="erro">${esc(e.message)}</p>`; return; }
+  if (pagina() !== "cadastro" || FILA.aba !== "sem") return;
+  corpo.innerHTML = `<p class="nota" style="margin-bottom:10px">Produtos que <b>vendem</b> mas não existem na dim_produtos — por isso não aparecem em nenhum planograma. Quando a base de ativos conhece o código, o cadastro já vem preenchido.</p>
+    <div class="fila-filtros"><label class="campo"><span>Procurar</span><input id="fs-busca" type="search" placeholder="EAN ou descrição da base" value="${esc(FILA.buscaSem)}"></label></div>
+    <div class="tabela-wrap"><table class="simples fila"><thead><tr><th>EAN</th><th>Na base de ativos</th><th>Lojas</th><th class="num">Venda</th><th></th></tr></thead><tbody id="fs-linhas"></tbody></table></div>
+    <p class="nota" style="margin-top:8px">${l.length >= 500 ? "Mostrando os 500 que mais vendem." : l.length + " produto(s)."}</p>`;
+  const pintar = () => {
+    const b = semAcento(FILA.buscaSem);
+    const vis = l.filter((x) => !b || semAcento([x.ean, x.base?.descricao, x.base?.marca].join(" ")).includes(b));
+    $("#fs-linhas").innerHTML = vis.length ? vis.slice(0, 500).map((x) => `<tr>
+        <td class="num"><b>${esc(x.ean)}</b></td>
+        <td>${x.base ? `${esc(x.base.descricao || "")}<small>${esc([x.base.categoria, x.base.subcategoria].filter(Boolean).join(" › "))}</small>` : '<span class="nota">não está na base</span>'}</td>
+        <td>${esc(x.lojas || "")}</td>
+        <td class="num">${esc(reais(x.venda))}</td>
+        <td><button type="button" class="btn btn-primario mini" data-fcad="${esc(x.ean)}">Cadastrar</button></td></tr>`).join("")
+      : `<tr><td colspan="5" class="nota">${l.length ? "Nada com esse filtro." : "🎉 Nenhum produto com venda sem cadastro."}</td></tr>`;
+    $$("[data-fcad]").forEach((bt) => bt.onclick = () => abrirNovoItem(bt.dataset.fcad, { aoSalvar: () => { FILA.dados = {}; if (pagina() === "cadastro") telaCadastro(); } }));
+  };
+  $("#fs-busca").oninput = (e) => { FILA.buscaSem = e.target.value; pintar(); };
+  pintar();
 }
 
 // ============================================================

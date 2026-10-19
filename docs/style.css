@@ -582,3 +582,35 @@ table.usuarios td { vertical-align: middle; }
 .xadrez { border: 1px solid var(--borda); border-radius: 10px; min-height: 150px; display: grid; place-items: center; padding: 6px;
   background: repeating-conic-gradient(#e9edf1 0% 25%, #fff 0% 50%) 50% / 16px 16px; }
 .xadrez img { max-height: 180px; max-width: 100%; object-fit: contain; }
+/* ---------- novo item ---------- */
+.ean-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.ean-linha .btn svg { width: 18px; height: 18px; }
+.nv-dados { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 14px; }
+.nv-dados:disabled { opacity: .45; }
+.nv-cosmos { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; align-items: center; border: 1px solid var(--borda); border-radius: 12px; padding: 10px; }
+.nv-cosmos[hidden] { display: none; }
+.nv-cosmos img { width: 96px; height: 96px; object-fit: contain; background: #fff; border-radius: 8px; }
+.nv-cosmos > div { display: grid; gap: 4px; }
+.ok-txt { color: var(--verde); font-weight: 600; }
+.leitor { position: relative; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
+.leitor video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.leitor .mira { position: absolute; left: 10%; right: 10%; top: 38%; bottom: 38%; border: 2px solid #fff; border-radius: 8px; box-shadow: 0 0 0 999px rgba(0,0,0,.28); }
+.leitor .mira::after { content: ""; position: absolute; left: 6px; right: 6px; top: 50%; height: 2px; background: #e8620d; animation: varrer 1.6s ease-in-out infinite alternate; }
+@keyframes varrer { from { transform: translateY(-18px); } to { transform: translateY(18px); } }
+/* ---------- fila do cadastro ---------- */
+.fila-topo { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.fila-abas { min-width: min(100%, 420px); }
+.fila-abas button { padding: 9px 12px; }
+.fila-filtros { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 10px; align-items: end; }
+.seg.seg3 { grid-template-columns: repeat(3, 1fr); }
+#ff-resumo { margin-bottom: 10px; }
+.chip-link { cursor: pointer; border: 0; font: inherit; }
+.chip-link:hover { filter: brightness(.95); text-decoration: underline; }
+table.fila td { vertical-align: middle; }
+table.fila td small { display: block; color: var(--texto-suave); font-size: .76rem; margin-top: 2px; }
+table.fila .mini-foto { width: 52px; }
+.mini-foto img { width: 44px; height: 44px; object-fit: contain; background: #fff; border-radius: 6px; border: 1px solid var(--borda); display: block; }
+.mini-foto span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 6px; background: var(--superficie-2); color: var(--texto-fraco); }
+.badge.b-falta { background: var(--laranja-claro); color: var(--laranja); }
+#ff-mais { margin-top: 10px; }
+@media (max-width: 600px) { .ean-linha { grid-template-columns: 1fr; } }
