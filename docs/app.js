@@ -46,6 +46,7 @@ const IC = {
   imprimir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   busca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   cadastro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14"/></svg>',
+  lista: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3 6 1 1 2-2M3 12l1 1 2-2M3 18l1 1 2-2"/></svg>',
   copiar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="4"/></svg>',
   mais: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -289,6 +290,7 @@ function telaPlano() {
       <div id="metricas" class="metricas"></div>
       <div id="avisos"></div>
       <div class="cartao canvas-cartao"><div id="canvas"></div></div>
+      <div id="analises"></div>
       <div id="resumo"></div>
     </section></div>`;
   renderPainel();
@@ -480,7 +482,7 @@ function buildProdInfo(linhas) {
     const q = Number(r.qtde) || 0;
     info[r.ean] = { descricao: r.descricao || r.ean, marca: r.marca || "", foto_url: r.foto_url || "", largura_cm: r.largura_cm, altura_cm: r.altura_cm,
       profundidade_cm: r.profundidade_cm, codigo_erp: r.codigo_erp || "", categoria: r.categoria || "", subcategoria: r.subcategoria || "",
-      preco_medio: q ? Number(r.venda) / q : 0 };
+      preco_medio: q ? Number(r.venda) / q : 0, venda: Number(r.venda) || 0, qtde: q };
   });
   return info;
 }
@@ -553,7 +555,8 @@ async function atualizarPlano(opc = {}) {
     if (salvo) recorte.forEach((r) => { if (!presentes.has(r.ean)) { fora.push({ ean: r.ean, motivo: "novo (com venda, fora do arranjo salvo)" }); presentes.add(r.ean); } });
     catExtra.forEach((r) => { if (!presentes.has(r.ean)) fora.push({ ean: r.ean, motivo: "sem venda (catalogo)" }); });
     E.plan = { loja: E.loja, nivel: E.nivel, recorte: recChave, gondola: gChave, slots, shelves, fora, titulo: (ordem || escolhas).join(" + ") };
-    E.resumo = sem[2]; E.baseStats = stats; E.planKey = chave;
+    E.resumo = sem[2]; E.baseStats = stats; E.planKey = chave; E.recAtual = recorte;
+    E.ultimoSalvo = salvo ? copiaShelves(shelves) : null; E.ultimoSalvoAnterior = null;
     E.planBase = estadoPlan(); E.hist = [];
     E.salvoInfo = null; carregarInfoSalvo();
   } else {
@@ -605,10 +608,266 @@ async function carregarPlanoSalvo(recChave, gChave, slots) {
   return [shelves, fora];
 }
 
+// ============================================================
+// ANÁLISES: réguas × altura, espaço × venda, cobertura de estoque, lista de mudanças
+// ============================================================
+const CFG_PADRAO = { folga: 3, diasVenda: 365, diasRepos: 3, prof: {} };
+E.cfg = (() => { try { const c = JSON.parse(lerLocal("plano_web_cfg") || "{}"); return { ...CFG_PADRAO, ...c, prof: { ...(c.prof || {}) } }; } catch { return { ...CFG_PADRAO, prof: {} }; } })();
+function gravarCfg() { gravarLocal("plano_web_cfg", JSON.stringify(E.cfg)); }
+const fmt1 = (v) => (Math.round(v * 10) / 10).toLocaleString("pt-BR");
+const pct = (v) => (v * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%";
+const somaArr = (l) => l.reduce((a, b) => a + Number(b), 0);
+const E_ABERTOS = new Set((lerLocal("plano_web_abertos") || "").split(",").filter(Boolean));
+function lembrarAberto(id, aberto) { aberto ? E_ABERTOS.add(id) : E_ABERTOS.delete(id); gravarLocal("plano_web_abertos", [...E_ABERTOS].join(",")); }
+
+// ---------- 1. réguas × altura dos produtos ----------
+function repartir(total, n) {
+  const cada = Math.floor(total / n), resto = Math.round(total - cada * n);
+  return Array.from({ length: n }, (_, i) => Math.max(5, cada + (i >= n - resto ? 1 : 0)));
+}
+function testarFileira(rec, mods, col, ordem, folga) {
+  const slots = M.montarSlots(mods);
+  const [sh, fora] = M.semearPlano(rec, slots, col, ordem);
+  const alt = {}; rec.forEach((r) => { alt[r.ean] = Number(r.altura_cm) || 0; });
+  const ok = sh.every((s, i) => s.every((e) => alt[e.ean] + folga <= slots[i].alt + 1e-6));
+  return { ok, fora: fora.filter((i) => !/catalogo/.test(i.motivo || "")).length };
+}
+function calcularSugestaoReguas(mods, rec, col, ordem, folga) {
+  const comAlt = rec.filter((r) => Number(r.altura_cm) > 0);
+  if (!comAlt.length || comAlt.length < rec.length * 0.6) return null;      // pouca medida pra confiar
+  const recFolga = rec.map((r) => (Number(r.altura_cm) > 0 ? { ...r, altura_cm: Number(r.altura_cm) + folga } : r));
+  const atual = testarFileira(rec, mods, col, ordem, 0);
+  let melhor = null;
+  for (let extra = 1; extra <= 4; extra++) {
+    let cand = mods.map((m) => ({ largura: m.largura, alturas: repartir(somaArr(m.alturas), m.alturas.length + extra) }));
+    if (cand.some((m) => Math.min(...m.alturas) < 10)) break;
+    const [novas] = M.alturasParaOsAltosBlocos(cand, recFolga, col, ordem);   // a régua do produto alto sobe (a altura total fica)
+    if (novas) cand = cand.map((m, i) => ({ largura: m.largura, alturas: novas[i].map(Number) }));
+    const r = testarFileira(rec, cand, col, ordem, folga);
+    if (!r.ok || r.fora > atual.fora) break;
+    melhor = { mods: cand, extra, ganho: somaArr(cand.map((m) => m.largura * extra)), maisAlto: Math.max(...comAlt.map((x) => Number(x.altura_cm))) };
+  }
+  return melhor;
+}
+let cacheReguas = { k: null, v: null };
+function sugestaoReguas() {
+  if (!E.plan || !E.recAtual) return null;
+  const mods = modsAtuais(), ordem = ordemAtual();
+  const k = JSON.stringify([E.planKey, mods, E.cfg.folga]);
+  if (cacheReguas.k === k) return cacheReguas.v;
+  let v = null;
+  try { v = calcularSugestaoReguas(mods, E.recAtual, colNivel(), ordem ? ordem.slice() : null, E.cfg.folga); } catch (e) { console.warn("sugestão de réguas", e); }
+  cacheReguas = { k, v };
+  return v;
+}
+function abrirSugestaoReguas() {
+  const sg = sugestaoReguas(); if (!sg) return;
+  const mods = modsAtuais();
+  abrirJanela(`<h3>📏 Mais réguas na mesma altura</h3>
+    <p class="nota">O produto mais alto do recorte tem <b>${fmt1(sg.maisAlto)} cm</b>. Mantendo a altura de cada módulo e <b>${E.cfg.folga} cm</b> de folga em cima de cada produto, cabem <b>${sg.extra} régua(s) a mais</b> por módulo — <b>+${fmt1(sg.ganho)} cm de frente</b>, sem nenhum produto a mais fora da gôndola.</p>
+    <table class="simples"><thead><tr><th>Módulo</th><th>Hoje</th><th>Sugerido (de cima pra baixo)</th></tr></thead><tbody>
+    ${sg.mods.map((m, i) => `<tr><td>M${i + 1}</td><td>${mods[i].alturas.length} × ${mods[i].alturas.map(fmtCm).join("/")}</td><td><b>${m.alturas.length}</b> × ${m.alturas.map(fmtCm).join("/")}</td></tr>`).join("")}</tbody></table>
+    <label class="campo"><span>Folga em cima do produto (cm) — espaço pra mão pegar e repor</span><input id="sg-folga" type="number" min="0" max="15" step="1" value="${E.cfg.folga}"></label>
+    <p class="nota">Aplicar muda as réguas no painel e remonta a gôndola no automático (o arranjo salvo na configuração antiga continua guardado). Depois é conferir e salvar.</p>
+    <div class="acoes"><button type="button" class="btn btn-borda" id="sg-nao">Fechar</button><button type="button" class="btn btn-primario" id="sg-sim">Aplicar ${sg.mods[0].alturas.length} réguas</button></div>`);
+  $("#sg-nao").onclick = fecharJanela;
+  $("#sg-folga").onchange = (e) => {
+    E.cfg.folga = Math.max(0, Math.min(15, parseInt(e.target.value, 10) || 0)); gravarCfg();
+    fecharJanela(); renderAvisos();
+    if (sugestaoReguas()) abrirSugestaoReguas(); else toast("Com essa folga não cabe régua a mais.");
+  };
+  $("#sg-sim").onclick = () => {
+    if (sujo() && !confirm("Há alterações não salvas na gôndola. Remontar com as novas réguas mesmo assim?")) return;
+    const est = estadoModulos();
+    sg.mods.forEach((m, i) => { est[i].nreg = m.alturas.length; est[i].alturas = m.alturas.slice(); });
+    fecharJanela(); renderPainel(); atualizarPlano();
+    toast(`Gôndola remontada com ${sg.mods[0].alturas.length} réguas por módulo (+${fmt1(sg.ganho)} cm de frente).`, "ok");
+  };
+}
+
+// ---------- 2. espaço × venda ----------
+function analiseEspaco(por) {
+  const campo = por === "sub" ? "subcategoria" : "marca", vazio = por === "sub" ? "(sem subcategoria)" : "(sem marca)";
+  const g = {}, pega = (k) => (g[k] ||= { k, skus: new Set(), frentes: 0, cm: 0, venda: 0, skusRec: 0 });
+  (E.recAtual || []).forEach((r) => { const x = pega(r[campo] || vazio); x.venda += Number(r.venda) || 0; x.skusRec++; });
+  E.plan.shelves.flat().forEach((e) => { const x = pega(E.prodInfo[e.ean]?.[campo] || vazio); x.skus.add(e.ean); x.frentes += e.frentes; x.cm += largDe(e.ean) * e.frentes; });
+  const linhas = Object.values(g), tCm = somaArr(linhas.map((x) => x.cm)) || 1, tV = somaArr(linhas.map((x) => x.venda)) || 1;
+  linhas.forEach((x) => { x.pe = x.cm / tCm; x.pv = x.venda / tV; x.ind = x.pv > 0 ? x.pe / x.pv : null; });
+  return linhas.sort((a, b) => b.venda - a.venda || b.cm - a.cm);
+}
+function seloIndice(ind, cm) {
+  if (ind == null) return cm > 0 ? '<span class="badge b-sobra">sem venda</span>' : "";
+  if (ind < 0.8) return '<span class="badge b-falta">falta espaço</span>';
+  if (ind > 1.25) return '<span class="badge b-sobra">sobra espaço</span>';
+  return '<span class="badge b-ok">equilibrado</span>';
+}
+function htmlEspaco() {
+  const por = E.cfg.espacoPor || "marca", l = analiseEspaco(por);
+  const falta = l.filter((x) => x.ind != null && x.ind < 0.8).length, sobra = l.filter((x) => x.ind != null && x.ind > 1.25).length;
+  return `<details class="cartao analise" data-id="espaco"${E_ABERTOS.has("espaco") ? " open" : ""}><summary>📊 Espaço × venda <small>${falta} com falta de espaço · ${sobra} sobrando</small></summary>
+    <div class="analise-topo"><div class="seg seg-mini"><button type="button" data-espor="marca" class="${por === "marca" ? "on" : ""}">Por marca</button><button type="button" data-espor="sub" class="${por === "sub" ? "on" : ""}">Por subcategoria</button></div>
+    <button type="button" class="btn btn-borda mini" id="esp-csv">⬇ Baixar CSV</button></div>
+    <p class="nota">Índice = % do espaço ÷ % da venda (venda da ${esc(nomeLoja(E.loja))}, incluindo o que está no Banco). Abaixo de 0,8 a ${por === "sub" ? "subcategoria" : "marca"} vende mais do que ocupa — merece mais frente; acima de 1,25 ocupa mais do que vende.</p>
+    <div class="tabela-wrap"><table class="simples analise-tab"><thead><tr><th>${por === "sub" ? "Subcategoria" : "Marca"}</th><th class="num">SKUs</th><th class="num">Frentes</th><th class="num">Espaço</th><th class="num">% espaço</th><th class="num">% venda</th><th class="num">Índice</th><th></th></tr></thead><tbody>
+    ${l.map((x) => `<tr><td><b>${esc(x.k)}</b></td><td class="num">${x.skus.size}/${x.skusRec}</td><td class="num">${x.frentes}</td><td class="num">${fmt1(x.cm)} cm</td>
+      <td class="num">${pct(x.pe)}<i class="barrinha" style="width:${Math.round(x.pe * 100)}%"></i></td><td class="num">${pct(x.pv)}<i class="barrinha v" style="width:${Math.round(x.pv * 100)}%"></i></td>
+      <td class="num">${x.ind == null ? "-" : x.ind.toFixed(2).replace(".", ",")}</td><td>${seloIndice(x.ind, x.cm)}</td></tr>`).join("")}
+    </tbody></table></div><p class="nota">SKUs = na gôndola / com venda no recorte.</p></details>`;
+}
+function baixarCsvEspaco() {
+  const por = E.cfg.espacoPor || "marca", l = analiseEspaco(por);
+  const n = (v) => String(Math.round(v * 1000) / 1000).replace(".", ",");
+  const linhas = [[por === "sub" ? "Subcategoria" : "Marca", "SKUs na gondola", "SKUs com venda", "Frentes", "Espaco cm", "% espaco", "% venda", "Indice", "Venda R$"].join(";")]
+    .concat(l.map((x) => [x.k, x.skus.size, x.skusRec, x.frentes, n(x.cm), n(x.pe * 100), n(x.pv * 100), x.ind == null ? "" : n(x.ind), n(x.venda)].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")));
+  const blob = new Blob(["﻿" + linhas.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `espaco_x_venda_${E.loja}_${E.plan.recorte}_${por}.csv`.replace(/[^\w.+-]+/g, "_"); a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+// ---------- 3. cobertura de estoque ----------
+const profPrateleira = () => Number(E.cfg.prof[E.gNome]) || Number(gondolaSel()?.profundidade_cm) || 40;
+function calcularCobertura() {
+  const prof = profPrateleira(), dV = Math.max(1, Number(E.cfg.diasVenda) || 365), dR = Math.max(0.5, Number(E.cfg.diasRepos) || 3);
+  const fr = {}; E.plan.shelves.flat().forEach((e) => { fr[e.ean] = (fr[e.ean] || 0) + e.frentes; });
+  return Object.keys(fr).map((ean) => {
+    const p = E.prodInfo[ean] || {}, pp = Number(p.profundidade_cm);
+    const un = pp > 0 ? Math.max(1, Math.floor(prof / pp + 1e-9)) : null;
+    const vd = (Number(p.qtde) || 0) / dV;
+    const cob = un && vd > 0 ? (fr[ean] * un) / vd : null;
+    const sug = un ? Math.max(1, Math.ceil((vd * dR) / un - 1e-9)) : null;
+    const st = !un ? "sem" : vd <= 0 ? "parado" : cob < dR ? "risco" : fr[ean] > 1 && cob > dR * 4 && fr[ean] > sug ? "sobra" : "ok";
+    return { ean, desc: p.descricao || ean, frentes: fr[ean], un, vd, cob, sug, st };
+  }).sort((a, b) => (a.cob ?? 1e9) - (b.cob ?? 1e9));
+}
+function htmlCobertura() {
+  const l = calcularCobertura(), risco = l.filter((x) => x.st === "risco").length, sem = l.filter((x) => x.st === "sem").length;
+  const sel = { risco: '<span class="badge b-falta">risco de ruptura</span>', sobra: '<span class="badge b-sobra">frente sobrando</span>', ok: '<span class="badge b-ok">ok</span>', parado: '<span class="badge b-sobra">sem venda</span>', sem: '<span class="badge b-cinza">sem profundidade</span>' };
+  return `<details class="cartao analise" data-id="cobertura"${E_ABERTOS.has("cobertura") ? " open" : ""}><summary>🧮 Frentes × cobertura de estoque <small>${risco} em risco de ruptura${sem ? ` · ${sem} sem profundidade` : ""}</small></summary>
+    <div class="cob-params">
+      <label class="campo"><span>A venda carregada é de quantos dias?</span><input type="number" min="1" max="1000" step="1" data-cfg="diasVenda" value="${E.cfg.diasVenda}"></label>
+      <label class="campo"><span>Reposição a cada (dias)</span><input type="number" min="0.5" max="60" step="0.5" data-cfg="diasRepos" value="${E.cfg.diasRepos}"></label>
+      <label class="campo"><span>Profundidade da prateleira (cm)</span><div class="linha-btn"><input type="number" min="10" max="150" step="1" id="cob-prof" value="${profPrateleira()}">${ehAdmin() ? '<button type="button" class="btn btn-borda mini" id="cob-gravar" title="Grava a profundidade na gôndola, pra todo mundo">💾</button>' : ""}</div></label>
+    </div>
+    <p class="nota">Unidades por frente = profundidade da prateleira ÷ profundidade do produto (uma fila, sem empilhar). Cobertura = frentes × unidades ÷ venda por dia. Sugerido = frentes pra aguentar a reposição.</p>
+    <div class="analise-topo"><button type="button" class="btn btn-primario mini" id="cob-ajustar">⚖️ Ajustar frentes pela cobertura</button><span class="nota">Tira frente de quem sobra e dá pra quem está em risco, régua por régua, sem estourar a largura (dá pra desfazer).</span></div>
+    <div class="tabela-wrap"><table class="simples analise-tab"><thead><tr><th>Produto</th><th class="num">Frentes</th><th class="num">Un/frente</th><th class="num">Venda/dia</th><th class="num">Cobertura</th><th class="num">Sugerido</th><th></th></tr></thead><tbody>
+    ${l.map((x) => `<tr><td>${esc(x.desc)}<small>${esc(x.ean)}</small></td><td class="num">${x.frentes}</td><td class="num">${x.un ?? "-"}</td><td class="num">${fmt1(x.vd)}</td>
+      <td class="num">${x.cob == null ? "-" : fmt1(x.cob) + " d"}</td><td class="num">${x.sug ?? "-"}</td><td>${sel[x.st]}</td></tr>`).join("")}
+    </tbody></table></div></details>`;
+}
+function ajustarFrentesCobertura() {
+  const l = calcularCobertura(), info = {};
+  l.forEach((x) => { info[x.ean] = x; });
+  const antes = estadoPlan();
+  const total = {}; E.plan.shelves.flat().forEach((e) => { total[e.ean] = (total[e.ean] || 0) + e.frentes; });
+  const cob = (e) => { const x = info[e.ean]; return x && x.un && x.vd > 0 ? (e.frentes * x.un) / x.vd : Infinity; };
+  E.plan.shelves.forEach((sh, i) => {
+    const W = Number(E.plan.slots[i].larg);
+    const alvo = new Map();
+    sh.forEach((e) => { const x = info[e.ean]; if (x && x.un && x.vd > 0) alvo.set(e, Math.max(1, Math.round((x.sug * e.frentes) / total[e.ean]))); });
+    sh.forEach((e) => { if (alvo.has(e) && e.frentes > alvo.get(e)) e.frentes = alvo.get(e); });     // 1) quem sobra devolve
+    let usado = somaArr(sh.map((e) => largDe(e.ean) * e.frentes));
+    const crescer = (filtro) => {                                                                  // 2) e 3) uma frente por vez, menor cobertura primeiro
+      for (;;) {
+        const c = sh.filter((e) => filtro(e) && largDe(e.ean) > 0 && usado + largDe(e.ean) <= W + 1e-6).sort((a, b) => cob(a) - cob(b))[0];
+        if (!c) break;
+        c.frentes++; usado += largDe(c.ean);
+      }
+    };
+    crescer((e) => alvo.has(e) && e.frentes < alvo.get(e));
+    crescer((e) => alvo.has(e));                                                                     // sobrou espaço: vai pra menor cobertura
+  });
+  if (estadoPlan() === antes) return toast("As frentes já estão equilibradas pela cobertura.");
+  E.hist.push(antes); E.hist = E.hist.slice(-30);
+  const depois = calcularCobertura();
+  renderArea();
+  toast(`Frentes ajustadas: ${depois.filter((x) => x.st === "risco").length} item(ns) ainda em risco (falta largura na régua).`, "ok");
+}
+
+// ---------- 4. lista de mudanças pro repositor ----------
+const copiaShelves = (sh) => sh.map((l) => l.map((e) => ({ ean: e.ean, frentes: e.frentes })));
+function rotuloSlot(i, slots) { const s = slots[i]; return (E.nMod > 1 || slots.some((x) => x.mod > 0) ? `M${s.mod + 1} · ` : "") + `R${s.reg + 1}${s.reg === 0 ? " (topo)" : ""}`; }
+function diffPlano(antes, depois) {
+  const lugares = (sh) => { const m = {}; sh.forEach((l, i) => l.forEach((e) => { const x = (m[e.ean] ||= {}); x[i] = (x[i] || 0) + e.frentes; })); return m; };
+  const A = lugares(antes), D = lugares(depois), porSlot = {}, saiu = [];
+  const add = (i, x) => (porSlot[i] ||= []).push(x);
+  Object.keys(D).forEach((ean) => {
+    const d = D[ean], a = A[ean];
+    if (!a) { Object.keys(d).forEach((i) => add(+i, { tipo: "entrou", ean, f: d[i] })); return; }
+    const novos = Object.keys(d).filter((i) => a[i] == null).map(Number), velhos = Object.keys(a).filter((j) => d[j] == null).map(Number);
+    novos.forEach((i) => add(i, { tipo: "veio", ean, f: d[i], de: velhos }));
+    Object.keys(d).forEach((i) => { if (a[i] != null && a[i] !== d[i]) add(+i, { tipo: "frentes", ean, de: a[i], f: d[i] }); });
+    if (!novos.length) velhos.forEach((j) => add(j, { tipo: "tirou", ean }));
+  });
+  Object.keys(A).forEach((ean) => { if (!D[ean]) saiu.push({ ean, de: Object.keys(A[ean]).map(Number) }); });
+  const n = somaArr(Object.values(porSlot).map((l) => l.length)) + saiu.length;
+  return { porSlot, saiu, n };
+}
+function textoMudancas(df, slots, rodape) {
+  const nome = (e) => E.prodInfo[e]?.descricao || e, fr = (f) => `${f} frente${f > 1 ? "s" : ""}`;
+  const onde = (l) => l.map((i) => rotuloSlot(i, slots)).join(", ");
+  const linhas = [`*Planograma — ${E.plan.titulo} · ${nomeLoja(E.plan.loja)}*`, rodape, ""];
+  Object.keys(df.porSlot).map(Number).sort((a, b) => a - b).forEach((i) => {
+    linhas.push(`*${rotuloSlot(i, slots)}*`);
+    const ordem = { entrou: 0, veio: 1, frentes: 2, tirou: 3 };
+    df.porSlot[i].sort((a, b) => ordem[a.tipo] - ordem[b.tipo]).forEach((x) => {
+      if (x.tipo === "entrou") linhas.push(`➕ Entra: ${nome(x.ean)} — ${fr(x.f)}`);
+      if (x.tipo === "veio") linhas.push(`↔️ Vem pra cá: ${nome(x.ean)} — ${fr(x.f)}${x.de.length ? ` (estava em ${onde(x.de)})` : ""}`);
+      if (x.tipo === "frentes") linhas.push(`🔢 ${nome(x.ean)}: ${x.de} → ${fr(x.f)}`);
+      if (x.tipo === "tirou") linhas.push(`➖ Sai desta régua: ${nome(x.ean)}`);
+    });
+    linhas.push("");
+  });
+  if (df.saiu.length) {
+    linhas.push("*Sai da gôndola*");
+    df.saiu.forEach((x) => linhas.push(`➖ ${nome(x.ean)} (estava em ${onde(x.de)})`));
+  }
+  return linhas.join("\n").trim();
+}
+function abrirMudancas(antes, titulo, rodape) {
+  if (!E.plan) return;
+  if (!antes) return toast("Ainda não há arranjo salvo pra comparar — pra primeira montagem, use a impressão.");
+  const df = diffPlano(antes, E.plan.shelves);
+  if (!df.n) return toast("Nada mudou em relação ao último arranjo salvo.");
+  const txt = textoMudancas(df, E.plan.slots, rodape);
+  const html = esc(txt).replace(/\*([^*\n]+)\*/g, "<b>$1</b>").replace(/\n/g, "<br>");
+  abrirJanela(`<h3>📝 ${esc(titulo)}</h3>
+    <p class="nota">${df.n} mudança(s). Mande pra loja: o repositor segue régua por régua, de cima pra baixo.</p>
+    <div class="mudancas">${html}</div>
+    <div class="acoes"><button type="button" class="btn btn-borda" id="md-fechar">Fechar</button><button type="button" class="btn btn-borda" id="md-imp">${IC.imprimir}Imprimir</button><button type="button" class="btn btn-primario" id="md-copiar">📋 Copiar pro WhatsApp</button></div>`);
+  $("#md-fechar").onclick = fecharJanela;
+  $("#md-copiar").onclick = async () => {
+    try { await navigator.clipboard.writeText(txt); toast("Texto copiado — é só colar no WhatsApp.", "ok"); }
+    catch { const t = document.createElement("textarea"); t.value = txt; document.body.appendChild(t); t.select(); document.execCommand("copy"); t.remove(); toast("Texto copiado.", "ok"); }
+  };
+  $("#md-imp").onclick = () => {
+    $("#impressao").innerHTML = `<style>@page{size:A4 portrait;margin:12mm}</style><div class="imp-mud">${html}</div>`;
+    fecharJanela(); window.print();
+  };
+}
+
+function renderAnalises() {
+  const el = $("#analises"); if (!el) return;
+  if (!E.plan) { el.innerHTML = ""; return; }
+  el.innerHTML = htmlEspaco() + htmlCobertura();
+  $$("details.analise", el).forEach((d) => d.addEventListener("toggle", () => lembrarAberto(d.dataset.id, d.open)));
+  $$("[data-espor]", el).forEach((b) => b.onclick = () => { E.cfg.espacoPor = b.dataset.espor; gravarCfg(); renderAnalises(); });
+  $("#esp-csv").onclick = baixarCsvEspaco;
+  $$("[data-cfg]", el).forEach((i) => i.onchange = () => { const v = parseFloat(String(i.value).replace(",", ".")); if (v > 0) { E.cfg[i.dataset.cfg] = v; gravarCfg(); } renderAnalises(); });
+  $("#cob-prof").onchange = (e) => { const v = parseFloat(String(e.target.value).replace(",", ".")); if (v >= 10) { E.cfg.prof[E.gNome] = v; gravarCfg(); } renderAnalises(); };
+  const gr = $("#cob-gravar");
+  if (gr) gr.onclick = async () => {
+    try { await rpc("plano_web_gondola_profundidade", { p_token: sessao.token, p_nome: E.gNome, p_prof: profPrateleira() }); const g = gondolaSel(); if (g) g.profundidade_cm = profPrateleira(); toast(`Profundidade de ${fmt1(profPrateleira())} cm gravada na gôndola.`, "ok"); }
+    catch (e) { toast(e.message, "erro"); }
+  };
+  $("#cob-ajustar").onclick = ajustarFrentesCobertura;
+}
+
 // ---------- área da direita ----------
 function renderArea(msgVazia) {
   if (!$("#canvas")) return;
-  renderAcoes(); renderChips(); renderMetricas(); renderAvisos(); renderCanvas(msgVazia); renderResumo();
+  renderAcoes(); renderChips(); renderMetricas(); renderAvisos(); renderCanvas(msgVazia); renderAnalises(); renderResumo();
 }
 function renderAcoes() {
   const el = $("#acoes"); if (!el) return;
@@ -618,6 +877,7 @@ function renderAcoes() {
     <button type="button" class="btn btn-borda" id="ac-resetar"${tem ? "" : " disabled"} title="Descarta os arrastos e volta pro arranjo automático">${IC.resetar}Resetar</button>
     <button type="button" class="btn btn-borda" id="ac-atualizar" title="Busca de novo vendas, cadastro e base no Supabase (mantém o arranjo da tela)">${IC.atualizar}Atualizar</button>
     <button type="button" class="btn btn-borda" id="ac-imprimir"${tem ? "" : " disabled"} title="Imprimir ou salvar em PDF">${IC.imprimir}Imprimir</button>
+    <button type="button" class="btn btn-borda" id="ac-mudancas"${tem && E.ultimoSalvo ? "" : " disabled"} title="O que mudou em relação ao último arranjo salvo — lista pro repositor">${IC.lista}Mudanças</button>
     <button type="button" class="btn btn-borda" id="ac-copiar"${tem ? "" : " disabled"} title="Grava este arranjo (como está na tela) em outras lojas">${IC.copiar}Copiar p/ lojas</button>
     ${ehAdmin() ? `<button type="button" class="btn btn-borda" id="ac-novo" title="Cadastra um produto com venda que não aparece por não existir na dim_produtos (ou estar sem categoria)">${IC.mais}Novo item</button>` : ""}
     <span class="estado-plano">${tem ? (E.origem === "salvo" ? "💾 arranjo salvo" + textoSalvo(E.salvoInfo) : "🟢 arranjo automático") : ""}${s ? ' · <b class="sujo">● alterações não salvas</b>' : ""}</span>`;
@@ -637,12 +897,13 @@ function renderAcoes() {
     try { E.inicio = await rpc("plano_web_inicio", { p_token: sessao.token }); prepararInicio(); } catch (e) { return toast(e.message, "erro"); }
     if (E.plan) {
       const col = colNivel(), escolhas = escolhasAtuais().slice().sort(cmpTxt);
-      try { const d = await carregarRecorte(col, escolhas); E.prodInfo = buildProdInfo(d.recorte.concat(d.catExtra)); E.baseStats = d.stats; } catch (e) { return toast(e.message, "erro"); }
+      try { const d = await carregarRecorte(col, escolhas); E.prodInfo = buildProdInfo(d.recorte.concat(d.catExtra)); E.baseStats = d.stats; E.recAtual = d.recorte; cacheReguas = { k: null, v: null }; } catch (e) { return toast(e.message, "erro"); }
     }
     renderPainel(); renderArea(); toast("Dados atualizados do Supabase.", "ok");
   };
   $("#ac-imprimir").onclick = abrirImpressao;
   $("#ac-copiar").onclick = abrirCopiar;
+  $("#ac-mudancas").onclick = () => abrirMudancas(sujo() ? E.ultimoSalvo : E.ultimoSalvoAnterior || E.ultimoSalvo, sujo() ? "Mudanças ainda não salvas" : "Mudanças do último salvamento", sujo() ? "Comparado com o arranjo salvo (falta salvar)" : `Comparado com o arranjo salvo antes${textoSalvo(E.salvoInfo).replace(/^ · /, " — ")}`);
   if ($("#ac-novo")) $("#ac-novo").onclick = () => abrirNovoItem();
 }
 function linhasDoPlano(shelves, fora, slots) {
@@ -657,7 +918,10 @@ async function salvarPlano() {
   const btn = $("#ac-salvar"); btn.disabled = true; btn.innerHTML = IC.salvar + "Salvando…";
   try {
     const r = await rpc("plano_web_salvar", { p_token: sessao.token, p_loja: E.plan.loja, p_nivel: E.plan.nivel, p_recorte: E.plan.recorte, p_gondola: E.plan.gondola, p_rows: rows });
-    E.origem = "salvo"; E.planBase = estadoPlan();
+    const anterior = E.ultimoSalvo;
+    E.origem = "salvo"; E.planBase = estadoPlan(); E.ultimoSalvo = copiaShelves(E.plan.shelves); E.ultimoSalvoAnterior = anterior;
+    if (anterior && diffPlano(anterior, E.plan.shelves).n)
+      setTimeout(() => abrirMudancas(anterior, "Mudanças salvas — mande pra loja", `Salvo ${new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", "")} por ${sessao.usuario}`), 50);
     E.salvoInfo = { loja: E.plan.loja, em: r?.em || new Date().toISOString(), por: r?.por || sessao.usuario };
     E.salvoLojas = (E.salvoLojas || []).filter((x) => x.loja !== E.plan.loja).concat(E.salvoInfo);
     toast("Arranjo salvo no Supabase.", "ok");
@@ -757,7 +1021,13 @@ function renderMetricas() {
 }
 function renderAvisos() {
   const el = $("#avisos"); if (!el) return;
-  el.innerHTML = E.plan ? `<p class="nota dica">${E.origem === "automatico" ? "🟢 Arranjo automático" : "💾 Arranjo salvo"} — arraste os produtos na gôndola; estique a alcinha da direita pra somar frentes; arraste pro Banco pra tirar. ${ehAdmin() ? "Dois cliques no produto editam as medidas. " : ""}Clique em <b>Salvar</b> para gravar.</p>` : "";
+  const sg = E.plan && !E.sgDispensada?.has(E.planKey + "|" + JSON.stringify(modsAtuais())) ? sugestaoReguas() : null;
+  const dica = sg ? `<div class="aviso sugestao">💡 <span>Os produtos estão baixos pra essas réguas: cabe${sg.extra > 1 ? "m" : ""} <b>${sg.extra} régua${sg.extra > 1 ? "s" : ""} a mais</b> por módulo na mesma altura (${E.cfg.folga} cm de folga) — <b>+${fmt1(sg.ganho)} cm de frente</b>.</span><button type="button" id="sg-ver">Ver sugestão</button><button type="button" id="sg-x" title="Não mostrar de novo pra essa gôndola">✕</button></div>` : "";
+  el.innerHTML = dica + (E.plan ? `<p class="nota dica">${E.origem === "automatico" ? "🟢 Arranjo automático" : "💾 Arranjo salvo"} — arraste os produtos na gôndola; estique a alcinha da direita pra somar frentes; arraste pro Banco pra tirar. ${ehAdmin() ? "Dois cliques no produto editam as medidas. " : ""}Clique em <b>Salvar</b> para gravar.</p>` : "");
+  if (sg) {
+    $("#sg-ver").onclick = abrirSugestaoReguas;
+    $("#sg-x").onclick = () => { (E.sgDispensada ||= new Set()).add(E.planKey + "|" + JSON.stringify(modsAtuais())); renderAvisos(); };
+  }
 }
 let gondolaAtual = null;
 function renderCanvas(msgVazia) {
@@ -787,7 +1057,7 @@ function renderCanvas(msgVazia) {
       E.plan.shelves = st.shelves.map((sh) => sh.map((e) => ({ ean: e.ean, frentes: Math.max(1, e.frentes) })));
       E.plan.fora = st.fora.map((i) => ({ ean: i.ean, motivo: i.motivo || "removido manualmente" }));
       if (estadoPlan() !== antes) { E.hist.push(antes); E.hist = E.hist.slice(-30); }
-      renderAcoes(); renderMetricas();
+      renderAcoes(); renderMetricas(); renderAnalises();
     },
     alturas: (a) => aplicarAlturasArrastadas(E.plan.slots, a),
     editar: (ean) => abrirEditor(ean),

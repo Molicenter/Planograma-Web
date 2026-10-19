@@ -622,3 +622,27 @@ table.fila .mini-foto { width: 52px; }
 .cp-loja small { color: var(--texto-suave); font-size: .76rem; }
 .cp-loja.off { opacity: .5; cursor: default; }
 .janela:has(.cp-lojas) { width: min(560px, calc(100% - 32px)); }
+/* ---------- análises ---------- */
+.aviso.sugestao { background: var(--verde-claro); color: var(--verde); margin-bottom: 8px; }
+.aviso.sugestao span { flex: 1; min-width: 220px; font-weight: 500; }
+.aviso.sugestao button + button { margin-left: 0; }
+.cartao.analise { margin-top: 14px; }
+.cartao.analise > summary { cursor: pointer; font-weight: 700; color: var(--azul-escuro); }
+.cartao.analise > summary small { font-weight: 500; color: var(--texto-suave); margin-left: 6px; }
+.cartao.analise[open] > summary { margin-bottom: 10px; }
+.analise-topo { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0 10px; }
+.seg.seg-mini { display: inline-grid; grid-template-columns: auto auto; }
+.seg.seg-mini button { padding: 5px 12px; }
+table.analise-tab td small { display: block; color: var(--texto-fraco); font-size: .72rem; }
+table.analise-tab td.num { position: relative; white-space: nowrap; }
+.barrinha { position: absolute; left: 10px; bottom: 3px; height: 3px; max-width: calc(100% - 20px); background: var(--azul); border-radius: 2px; opacity: .55; }
+.barrinha.v { background: var(--magenta); }
+.badge.b-ok { background: var(--verde-claro); color: var(--verde); }
+.badge.b-sobra { background: var(--azul-claro); color: var(--azul); }
+.badge.b-cinza { background: var(--superficie-2); color: var(--texto-fraco); border: 1px solid var(--borda); }
+.cob-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.linha-btn { display: flex; gap: 6px; }
+.linha-btn input { flex: 1; min-width: 0; }
+.mudancas { background: var(--superficie-2); border: 1px solid var(--borda); border-radius: 12px; padding: 12px 14px; font-size: .86rem; line-height: 1.55; max-height: 50vh; overflow-y: auto; }
+.janela:has(.mudancas) { width: min(620px, calc(100% - 32px)); }
+.imp-mud { font: 13px/1.6 var(--fonte); color: #000; }
