@@ -721,40 +721,109 @@ function renderResumo() {
 }
 window.addEventListener("resize", () => { if (E.ajusteTela && pagina() === "plano") { clearTimeout(window._rz); window._rz = setTimeout(renderCanvas, 200); } });
 
-// ---------- editor de medidas (dois cliques, só admin) ----------
+// ---------- editor de medidas e foto (dois cliques, só admin) ----------
 function abrirEditor(ean) {
   if (!ehAdmin()) return;
   const p = E.prodInfo[ean] || {};
   const v = (x) => (x == null || isNaN(x) ? "" : String(x));
   const g = $("#gaveta");
+  let foto = null, arquivoFoto = null, versao = 0;          // foto tratada pronta pra subir
   g.innerHTML = `<header><div><h3>${esc(p.descricao || ean)}</h3><p>EAN ${esc(ean)}${p.marca ? " · " + esc(p.marca) : ""}${p.codigo_erp ? " · Cód ERP " + esc(p.codigo_erp) : ""}</p></div>
       <button type="button" class="btn-fechar" data-fechar aria-label="Fechar">×</button></header>
     <form class="corpo" id="form-medidas" autocomplete="off">
-      <div class="foto-atual">${p.foto_url ? `<img src="${esc(p.foto_url)}" alt="">` : '<span class="nota">(sem foto)</span>'}</div>
+      <div class="foto-atual" id="foto-atual">${p.foto_url ? `<img src="${esc(p.foto_url)}" alt="foto atual">` : '<span class="nota">(sem foto)</span>'}</div>
       <div class="linha3">
         <label class="campo"><span>Largura (cm)</span><input name="l" type="number" min="0" max="500" step="0.1" value="${v(p.largura_cm)}"></label>
         <label class="campo"><span>Altura (cm)</span><input name="a" type="number" min="0" max="500" step="0.1" value="${v(p.altura_cm)}"></label>
         <label class="campo"><span>Profundidade (cm)</span><input name="p" type="number" min="0" max="500" step="0.1" value="${v(p.profundidade_cm)}"></label>
       </div>
-      <p class="nota">Grava direto na <b>dim_produtos</b> (vale pro Streamlit também). Produto que veio só da base de ativos ganha a linha no cadastro. A troca de foto chega na próxima etapa.</p>
+      <div class="troca-foto">
+        <label class="zona mini" id="zona-foto">${IC.base}<strong>Trocar a foto (opcional)</strong><span>clique, arraste ou cole (Ctrl+V) · PNG, JPG ou WEBP</span>
+          <input type="file" id="arq-foto" accept="image/png,image/jpeg,image/webp" hidden></label>
+        <label class="check"><input type="checkbox" id="tratar-foto" checked> Remover fundo e cortar nas bordas</label>
+        <p class="nota" style="margin-top:-4px">Mesmo tratamento do pipeline do Simplus. Desmarque se a foto já estiver recortada com fundo transparente.</p>
+        <div class="prev-foto" id="prev-foto" hidden>
+          <figure><figcaption>Original</figcaption><div class="xadrez"><img id="prev-orig" alt=""></div></figure>
+          <figure><figcaption>Como vai ficar</figcaption><div class="xadrez"><img id="prev-novo" alt=""></div><small id="prev-info" class="nota"></small></figure>
+        </div>
+      </div>
+      <p class="nota">Grava direto na <b>dim_produtos</b> e no bucket de fotos (vale pro Streamlit também). Produto que veio só da base de ativos ganha a linha no cadastro.</p>
     </form>
-    <footer><button type="submit" form="form-medidas" class="btn btn-primario" id="btn-medidas">💾 Salvar medidas</button><button type="button" class="btn btn-borda" data-fechar>Cancelar</button></footer>`;
+    <footer><button type="submit" form="form-medidas" class="btn btn-primario" id="btn-medidas">💾 Salvar</button><button type="button" class="btn btn-borda" data-fechar>Cancelar</button></footer>`;
   g.hidden = false; $("#veu").hidden = false;
   $$("[data-fechar]", g).forEach((b) => b.onclick = fecharGaveta);
   $('[name="l"]', g).focus();
+
+  async function preparar() {
+    if (!arquivoFoto) return;
+    const minha = ++versao, btn = $("#btn-medidas");
+    btn.disabled = true; $("#prev-info").textContent = "Tratando a foto…";
+    $("#prev-foto").hidden = false;
+    $("#prev-orig").src = URL.createObjectURL(arquivoFoto);
+    try {
+      const r = await window.Foto.tratar(arquivoFoto, { removerFundo: $("#tratar-foto").checked });
+      if (minha !== versao) return;
+      foto = r;
+      $("#prev-novo").src = URL.createObjectURL(r.blob);
+      $("#prev-info").textContent = `${r.largura} × ${r.altura} px · ${(r.blob.size / 1024).toFixed(0)} KB · ${r.extensao.toUpperCase()}` +
+        ($("#tratar-foto").checked && !r.fundoRemovido ? " · não achei fundo liso pra remover (só cortou)" : "");
+    } catch (e) { foto = null; $("#prev-info").textContent = ""; toast("Não consegui tratar a foto: " + e.message, "erro"); }
+    finally { if (minha === versao) btn.disabled = false; }
+  }
+  function escolher(f) {
+    if (!f) return;
+    if (!/^image\/(png|jpe?g|webp)$/i.test(f.type)) return toast("Envie uma imagem PNG, JPG ou WEBP.", "erro");
+    arquivoFoto = f; preparar();
+  }
+  const zona = $("#zona-foto"), inp = $("#arq-foto");
+  inp.onchange = () => escolher(inp.files[0]);
+  zona.addEventListener("dragover", (e) => { e.preventDefault(); zona.classList.add("arrastando"); });
+  zona.addEventListener("dragleave", () => zona.classList.remove("arrastando"));
+  zona.addEventListener("drop", (e) => { e.preventDefault(); zona.classList.remove("arrastando"); escolher(e.dataTransfer.files[0]); });
+  g.onpaste = (e) => { const it = [...(e.clipboardData?.items || [])].find((x) => x.type.startsWith("image/")); if (it) { e.preventDefault(); escolher(it.getAsFile()); } };
+  $("#tratar-foto").onchange = preparar;
+
   $("#form-medidas").onsubmit = async (ev) => {
     ev.preventDefault();
     const f = ev.target, n = (k) => { const x = parseFloat(String(f.elements[k].value).replace(",", ".")); return x > 0 ? x : null; };
+    const novo = { largura_cm: n("l"), altura_cm: n("a"), profundidade_cm: n("p") };
+    // como no Streamlit: só regrava a medida (e marca fonte "manual") se ela mudou
+    const mudouDim = Object.keys(novo).some((k) => { const a = p[k] == null || isNaN(p[k]) ? null : Number(p[k]); return (novo[k] == null) !== (a == null) || (novo[k] != null && Math.abs(novo[k] - a) > 0.001); });
+    if (!mudouDim && !foto) { fecharGaveta(); return; }
     const btn = $("#btn-medidas"); btn.disabled = true; btn.textContent = "Gravando…";
+    const info = E.prodInfo[ean] || (E.prodInfo[ean] = {});
+    const produto = { descricao: p.descricao, marca: p.marca, categoria: p.categoria, subcategoria: p.subcategoria, codigo_erp: p.codigo_erp };
     try {
-      const r = await rpc("plano_web_produto_medidas", { p_token: sessao.token, p: { ean, largura_cm: n("l"), altura_cm: n("a"), profundidade_cm: n("p"),
-        descricao: p.descricao, marca: p.marca, categoria: p.categoria, subcategoria: p.subcategoria, codigo_erp: p.codigo_erp } });
-      const info = E.prodInfo[ean] || (E.prodInfo[ean] = {});
-      info.largura_cm = num(r.largura_cm); info.altura_cm = num(r.altura_cm); info.profundidade_cm = num(r.profundidade_cm);
-      Object.keys(E.cache).forEach((k) => { const c = E.cache[k]; [c.recorte, c.catExtra].forEach((l) => l.forEach((x) => { if (x.ean === ean) Object.assign(x, { largura_cm: info.largura_cm, altura_cm: info.altura_cm, profundidade_cm: info.profundidade_cm }); })); });
-      fecharGaveta(); renderArea(); toast("Medidas salvas.", "ok");
-    } catch (e) { toast(e.message, "erro"); btn.disabled = false; btn.textContent = "💾 Salvar medidas"; }
+      if (mudouDim) {
+        const r = await rpc("plano_web_produto_medidas", { p_token: sessao.token, p: { ean, ...novo, ...produto } });
+        info.largura_cm = num(r.largura_cm); info.altura_cm = num(r.altura_cm); info.profundidade_cm = num(r.profundidade_cm);
+      }
+      if (foto) {
+        btn.textContent = "Enviando a foto…";
+        const r = await enviarFoto(ean, foto, produto);
+        info.foto_url = r.foto_url;
+      }
+      Object.keys(E.cache).forEach((k) => { const c = E.cache[k]; [c.recorte, c.catExtra].forEach((l) => l.forEach((x) => { if (x.ean === ean) Object.assign(x, { largura_cm: info.largura_cm, altura_cm: info.altura_cm, profundidade_cm: info.profundidade_cm, foto_url: info.foto_url || x.foto_url }); })); });
+      fecharGaveta(); renderArea();
+      toast(foto && mudouDim ? "Medidas e foto salvas." : foto ? "Foto salva." : "Medidas salvas.", "ok");
+    } catch (e) { toast(e.message, "erro"); btn.disabled = false; btn.textContent = "💾 Salvar"; }
   };
+}
+const ERROS_FOTO = { SEM_PERMISSAO: "Só o Administrador troca foto (ou a sessão expirou — entre de novo).", IMAGEM_INVALIDA: "A foto tratada veio inválida ou grande demais.",
+  EAN_INVALIDO: "Esse produto não tem um EAN válido pra dar nome à foto.", STORAGE_FALHOU: "O Supabase recusou gravar a foto no bucket." };
+async function enviarFoto(ean, foto, produto) {
+  const imagem = await window.Foto.paraBase64(foto.blob);
+  let resp;
+  try {
+    resp = await fetch(`${CFG.SUPABASE_URL}/functions/v1/plano-fotos`, {
+      method: "POST", headers: { apikey: CFG.SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ token: sessao.token, ean, imagem, produto }),
+    });
+  } catch { throw new Error("Sem conexão com a internet. Tente de novo."); }
+  const j = await resp.json().catch(() => ({}));
+  if (resp.status === 404) throw new Error("A função plano-fotos ainda não está publicada no Supabase.");
+  if (!resp.ok || !j.foto_url) throw new Error("Falha ao gravar a foto: " + (ERROS_FOTO[j.erro] || j.erro || `erro ${resp.status}`));
+  return j;
 }
 function fecharGaveta() { $("#gaveta").hidden = true; $("#veu").hidden = true; }
 $("#veu").addEventListener("click", fecharGaveta);

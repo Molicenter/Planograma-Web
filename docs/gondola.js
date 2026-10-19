@@ -298,7 +298,7 @@
     var handle = document.createElement("div"); handle.className = "handle"; handle.title = "Arraste pra esticar (frentes)";
     b.appendChild(handle);
     handle.addEventListener("pointerdown", function (ev) {
-      ev.stopPropagation(); ev.preventDefault(); handle.setPointerCapture(ev.pointerId);
+      ev.stopPropagation(); ev.preventDefault(); try { handle.setPointerCapture(ev.pointerId); } catch (e) {}
       self.drag = { type: "stretch", s: s, i: i, startX: ev.clientX, startFr: e.frentes, unit: wUnit, blk: b, badge: badge };
     });
     handle.addEventListener("pointermove", function (ev) {
@@ -316,7 +316,7 @@
       if (ev.target === handle) return;
       ev.preventDefault();
       if (cfg.edita && self.tapDuplo(e.ean)) { self.drag = null; if (self.cb.editar) self.cb.editar(e.ean); return; }
-      b.setPointerCapture(ev.pointerId);
+      try { b.setPointerCapture(ev.pointerId); } catch (e) {}
       self.drag = { type: "move", from: "shelf", s: s, i: i, ean: e.ean, frentes: e.frentes, blk: b, w: largoTotal, h: h, unit: wUnit, foto: p.foto };
       self.startGhost(ev); b.classList.add("dragging");
     });
@@ -338,7 +338,7 @@
       ev.preventDefault();
       if (self.cfg.edita && self.tapDuplo(item.ean)) { self.drag = null; if (self.cb.editar) self.cb.editar(item.ean); return; }
       if (!temDim) return;
-      c.setPointerCapture(ev.pointerId);
+      try { c.setPointerCapture(ev.pointerId); } catch (e) {}
       self.drag = { type: "move", from: "banco", k: k, ean: item.ean, frentes: 1, blk: c,
         w: self.larguraPx(item.ean), h: self.alturaPx(item.ean), unit: self.larguraPx(item.ean), foto: p.foto };
       self.startGhost(ev); c.classList.add("dragging");
@@ -367,7 +367,7 @@
   P.ligarArrasteAltura = function (te, s, abaixos, shEl) {
     var self = this, cfg = this.cfg;
     te.addEventListener("pointerdown", function (ev) {
-      ev.preventDefault(); ev.stopPropagation(); te.setPointerCapture(ev.pointerId);
+      ev.preventDefault(); ev.stopPropagation(); try { te.setPointerCapture(ev.pointerId); } catch (e) {}
       self.dragAlt = { s: s, y0: ev.clientY, hA: self.alturaRegua(s), elA: shEl, te: te,
         ab: abaixos.map(function (k) {
           return { s: k, h: self.alturaRegua(k), el: self.el.querySelector('.shelf[data-shelf="' + k + '"]'),
@@ -406,7 +406,7 @@
   P.ligarArrasteTopo = function (el, g) {
     var self = this, cfg = this.cfg, sTopo = g[0];
     el.addEventListener("pointerdown", function (ev) {
-      ev.preventDefault(); ev.stopPropagation(); el.setPointerCapture(ev.pointerId);
+      ev.preventDefault(); ev.stopPropagation(); try { el.setPointerCapture(ev.pointerId); } catch (e) {}
       var outras = self.gruposPorModulo().filter(function (o) { return o[0] !== sTopo; }).map(function (o) { return self._somaModulo(o); });
       self.dragTopo = { s: sTopo, y0: ev.clientY, h0: self.alturaRegua(sTopo), total0: self._somaModulo(g), outras: outras, el: el,
         shelf: self.el.querySelector('.shelf[data-shelf="' + sTopo + '"]'), te: self.el.querySelector('.testeira[data-slot="' + sTopo + '"]') };

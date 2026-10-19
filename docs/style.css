@@ -570,3 +570,15 @@ table.usuarios td { vertical-align: middle; }
   #impressao * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .shelf, .testeira { break-inside: avoid; }
 }
+/* ---------- troca de foto ---------- */
+.troca-foto { display: grid; gap: 10px; }
+.zona.mini { padding: 14px; gap: 2px; }
+.zona.mini svg { width: 26px; height: 26px; }
+.zona.mini strong { font-size: .92rem; }
+.zona.mini span { font-size: .78rem; }
+.prev-foto { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.prev-foto figure { margin: 0; display: grid; gap: 4px; }
+.prev-foto figcaption { font-size: .76rem; font-weight: 700; color: var(--texto-suave); }
+.xadrez { border: 1px solid var(--borda); border-radius: 10px; min-height: 150px; display: grid; place-items: center; padding: 6px;
+  background: repeating-conic-gradient(#e9edf1 0% 25%, #fff 0% 50%) 50% / 16px 16px; }
+.xadrez img { max-height: 180px; max-width: 100%; object-fit: contain; }
