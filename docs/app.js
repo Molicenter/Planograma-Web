@@ -146,7 +146,8 @@ const E = {
   busca: { categoria: "", subcategoria: "" },
   gNome: null, nMod: 1,
   modsEst: {},                        // gNome -> [{largura, nreg, alturas}] (até 8 módulos)
-  zoomManual: null, ajusteTela: false,
+  zoomManual: null, ajusteTela: lerLocal("plano_web_ajuste") !== "0",   // enquadrar na tela é o padrão
+  sobraCanvas: 90,                    // px da gôndola que não são régua (título, topo, base) - medido a cada desenho
   ordens: {},                         // "col|escolhas" -> ordem de cima pra baixo
   cache: {},                          // recortes já baixados
   plan: null, planKey: null, prodInfo: {}, resumo: [], origem: "automatico", baseStats: null,
@@ -381,7 +382,7 @@ function renderAbaGondola() {
   let h = `<label class="campo"><span>Gôndola (molde)</span><select id="g-nome">${E.gondolasOrd.map((n) => `<option${n === E.gNome ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
     <div class="linha2">
       <label class="campo"><span>Módulos lado a lado</span><input id="g-nmod" type="number" min="1" max="8" step="1" value="${E.nMod}"></label>
-      <label class="campo"><span>Zoom (px/cm)</span><div class="passo-n"><button type="button" data-zoom="-1">−</button><b id="zoom-v">${escalaAtual()}</b><button type="button" data-zoom="1">+</button></div></label>
+      <label class="campo"><span>Zoom (px/cm)</span><div class="passo-n"><button type="button" data-zoom="-0.5">−</button><b id="zoom-v">${fmtZoom(escalaAtual())}</b><button type="button" data-zoom="0.5">+</button></div></label>
     </div>
     <label class="check"><input type="checkbox" id="g-ajuste"${E.ajusteTela ? " checked" : ""}> Ajustar zoom à tela</label>`;
   if (E.nMod > 1) h += `<p class="nota">Fileira: <b>${esc(M.composicao(mods))}</b> — ${fmtCm(mods.reduce((a, m) => a + m.largura, 0))} cm de frente, ${fmtCm(M.alturaTotal(mods))} cm de altura</p>`;
@@ -414,10 +415,11 @@ function renderAbaGondola() {
     E.nMod = n; renderPainel(); atualizarPlano();
   };
   $$("[data-zoom]", corpo).forEach((b) => b.onclick = () => {
-    E.ajusteTela = false; E.zoomManual = Math.max(2, Math.min(8, escalaAtual() + +b.dataset.zoom));
+    E.ajusteTela = false; gravarLocal("plano_web_ajuste", "0");
+    E.zoomManual = Math.max(ESC_MIN, Math.min(ESC_MAX, Math.round((escalaAtual() + +b.dataset.zoom) * 2) / 2));
     renderPainel(); renderCanvas();
   });
-  $("#g-ajuste").onchange = (ev) => { E.ajusteTela = ev.target.checked; renderPainel(); renderCanvas(); };
+  $("#g-ajuste").onchange = (ev) => { E.ajusteTela = ev.target.checked; gravarLocal("plano_web_ajuste", E.ajusteTela ? null : "0"); renderPainel(); renderCanvas(); };
   $$("[data-larg]", corpo).forEach((i) => i.onchange = () => {
     const v = parseFloat(String(i.value).replace(",", "."));
     if (!(v >= 20)) { i.value = fmtCm(est[+i.dataset.larg].largura); return; }
@@ -448,12 +450,18 @@ function renderAbaGondola() {
     } catch (e) { toast(e.message, "erro"); }
   };
 }
+const ESC_MIN = 1.5, ESC_MAX = 8;
+const quarto = (x) => Math.floor(x * 4) / 4;
 function escalaAtual() {
   const mods = modsAtuais(), larg = mods.reduce((a, m) => a + m.largura, 0) || 1;
   if (E.ajusteTela) {
+    // cabe inteira na tela: na largura (com o Banco do lado em tela larga) E na altura (abaixo da barra de ações fixa)
     const cv = $("#canvas"), w = cv ? cv.clientWidth : 1100;
-    const util = w >= 1100 ? w - 360 : w;           // painel do Banco do lado em tela larga
-    return Math.max(2, Math.min(8, Math.floor((util - 40 - 20 * mods.length) / larg)));
+    const util = w >= 760 ? w - 340 : w;                       // deixa o Banco do lado sempre que der
+    const porLarg = (util - 70 - 16 * (mods.length - 1)) / larg;
+    const barra = $("#acoes") ? $("#acoes").offsetHeight + 24 : 80;
+    const porAlt = (window.innerHeight - barra - E.sobraCanvas) / Math.max(1, M.alturaTotal(mods));
+    return Math.max(ESC_MIN, Math.min(ESC_MAX, quarto(Math.min(porLarg, porAlt))));
   }
   if (E.zoomManual) return E.zoomManual;
   const auto = Math.max(2, Math.min(8, Math.floor(1100 / Math.max(1, larg))));
@@ -902,6 +910,10 @@ function renderAcoes() {
     renderPainel(); renderArea(); toast("Dados atualizados do Supabase.", "ok");
   };
   $("#ac-imprimir").onclick = abrirImpressao;
+  // a barra fixa mudou de altura (quebrou linha): reenquadra a gôndola
+  const hb = el.offsetHeight;
+  if (E.ajusteTela && E.altBarra && Math.abs(hb - E.altBarra) > 4) { clearTimeout(renderAcoes.t); renderAcoes.t = setTimeout(renderCanvas, 0); }
+  E.altBarra = hb;
   $("#ac-copiar").onclick = abrirCopiar;
   $("#ac-mudancas").onclick = () => abrirMudancas(sujo() ? E.ultimoSalvo : E.ultimoSalvoAnterior || E.ultimoSalvo, sujo() ? "Mudanças ainda não salvas" : "Mudanças do último salvamento", sujo() ? "Comparado com o arranjo salvo (falta salvar)" : `Comparado com o arranjo salvo antes${textoSalvo(E.salvoInfo).replace(/^ · /, " — ")}`);
   if ($("#ac-novo")) $("#ac-novo").onclick = () => abrirNovoItem();
@@ -1030,17 +1042,29 @@ function renderAvisos() {
   }
 }
 let gondolaAtual = null;
+const fmtZoom = (v) => String(v).replace(".", ",");
+// desenha e, no "ajustar à tela", mede o que a gôndola gasta além das réguas pra acertar o enquadramento
 function renderCanvas(msgVazia) {
-  const el = $("#canvas"); if (!el) return;
+  const esc_ = desenharCanvas(msgVazia);
+  const g = E.ajusteTela && esc_ ? $("#canvas .gbox") : null;
+  if (!g) return;
+  const sobra = Math.round(g.offsetHeight - M.alturaTotal(modsAtuais()) * esc_);
+  if (sobra > 0 && Math.abs(sobra - E.sobraCanvas) > 6) {
+    E.sobraCanvas = sobra;
+    if (escalaAtual() !== esc_) desenharCanvas(msgVazia);
+  }
+}
+function desenharCanvas(msgVazia) {
+  const el = $("#canvas"); if (!el) return null;
   const esc_ = escalaAtual();
-  const zv = $("#zoom-v"); if (zv) zv.textContent = esc_;
+  const zv = $("#zoom-v"); if (zv) zv.textContent = fmtZoom(esc_);
   if (!E.plan) {
     const mods = modsAtuais(), slots = M.montarSlots(mods);
     const cfg = { slots: slots.map((s) => ({ ...s })), escala: esc_, produtos: {}, edita: false, ajustaAlt: true,
       titulo: escolhasAtuais().length ? escolhasAtuais().join(" + ") : "Sem categoria", vazia: !msgVazia };
     gondolaAtual = Gondola.montar(el, cfg, { shelves: slots.map(() => []), fora: [] }, { alturas: (a) => aplicarAlturasArrastadas(slots, a) });
     if (msgVazia) el.insertAdjacentHTML("afterbegin", `<div class="aviso">${esc(msgVazia)}</div>`);
-    return;
+    return esc_;
   }
   const produtos = {};
   const eans = new Set(E.plan.shelves.flat().map((e) => e.ean).concat(E.plan.fora.map((i) => i.ean)));
@@ -1062,6 +1086,7 @@ function renderCanvas(msgVazia) {
     alturas: (a) => aplicarAlturasArrastadas(E.plan.slots, a),
     editar: (ean) => abrirEditor(ean),
   });
+  return esc_;
 }
 // v7.23 - altura arrastada na tarja/topo vai pros campos dos módulos (arredonda pro cm, mínimo 5)
 function aplicarAlturasArrastadas(slots, alts) {
