@@ -46,6 +46,7 @@ const IC = {
   imprimir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   busca: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   cadastro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5v14M7 5v14M11 5v14M14 5v14M18 5v14M21 5v14"/></svg>',
+  copiar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
   camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 8a2 2 0 0 1 2-2h2l2-2h6l2 2h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="4"/></svg>',
   mais: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
 };
@@ -213,7 +214,7 @@ function render() {
   $("#rotulo-loja").hidden = pg !== "plano";
   montarSeletorLoja();
   if (pg === "usuarios") { $("#pg-titulo").textContent = "Usuários"; $("#pg-sub").textContent = "Quem entra no Planograma e com qual perfil"; telaUsuarios(); return; }
-  if (pg === "cadastro" && render.ultima !== "cadastro") { FILA.dados = {}; E.semCad = null; }   // entrou na tela: busca de novo
+  if (pg === "cadastro" && render.ultima !== "cadastro") { FILA.dados = {}; FILA.sem = null; E.semCad = null; }   // entrou na tela: busca de novo
   render.ultima = pg;
   if (pg === "cadastro") { $("#pg-titulo").textContent = "Fila do cadastro"; $("#pg-sub").textContent = "Produtos com venda que faltam foto, medida ou o próprio cadastro — os que mais vendem primeiro"; telaCadastro(); return; }
   if (pg === "base") { $("#pg-titulo").textContent = "Base de ativos"; $("#pg-sub").textContent = "O produtos.xlsx do ERP: ativos sem venda vão pro Banco e as medidas completam o cadastro"; telaBase(); return; }
@@ -458,10 +459,10 @@ function escalaAtual() {
 }
 
 // ---------- montar / carregar o plano (main() do Streamlit) ----------
-async function carregarRecorte(col, escolhas) {
-  const k = E.loja + "|" + col + "|" + escolhas.join("\u0001");
+async function carregarRecorte(col, escolhas, loja = E.loja) {
+  const k = loja + "|" + col + "|" + escolhas.join("\u0001");
   if (E.cache[k]) return E.cache[k];
-  const r = await rpc("plano_web_recorte", { p_token: sessao.token, p_loja: E.loja, p_col: col, p_escolhas: escolhas, p_norm: escolhas.map(window.Base.norm) });
+  const r = await rpc("plano_web_recorte", { p_token: sessao.token, p_loja: loja, p_col: col, p_escolhas: escolhas, p_norm: escolhas.map(window.Base.norm) });
   const recorte = r.recorte.map((a) => ({ ean: String(a[0]), qtde: num(a[1]), venda: num(a[2]), margem: num(a[3]), descricao: a[4], marca: a[5],
     categoria: a[6], subcategoria: a[7], largura_cm: num(a[8]), altura_cm: num(a[9]), profundidade_cm: num(a[10]), foto_url: a[11] || "", codigo_erp: a[12] }));
   const naVenda = new Set(recorte.map((r_) => r_.ean));
@@ -548,10 +549,13 @@ async function atualizarPlano(opc = {}) {
     if (salvo) { [shelves, fora] = salvo; E.origem = "salvo"; }
     else { [shelves, fora] = [sem[0], sem[1]]; E.origem = "automatico"; }
     const presentes = new Set(shelves.flat().map((e) => e.ean).concat(fora.map((i) => i.ean)));
+    // começou a vender depois que o arranjo foi salvo: aparece no Banco (o Streamlit sumia com ele)
+    if (salvo) recorte.forEach((r) => { if (!presentes.has(r.ean)) { fora.push({ ean: r.ean, motivo: "novo (com venda, fora do arranjo salvo)" }); presentes.add(r.ean); } });
     catExtra.forEach((r) => { if (!presentes.has(r.ean)) fora.push({ ean: r.ean, motivo: "sem venda (catalogo)" }); });
     E.plan = { loja: E.loja, nivel: E.nivel, recorte: recChave, gondola: gChave, slots, shelves, fora, titulo: (ordem || escolhas).join(" + ") };
     E.resumo = sem[2]; E.baseStats = stats; E.planKey = chave;
     E.planBase = estadoPlan(); E.hist = [];
+    E.salvoInfo = null; carregarInfoSalvo();
   } else {
     E.plan.gondola = gChave;
     // v7.22 - mexeu só na altura das réguas: reencaixa sem re-semear
@@ -565,6 +569,18 @@ async function atualizarPlano(opc = {}) {
   carregando(false);
   renderArea();
 }
+// quem salvou e quando (e em quais lojas esse recorte+gôndola já tem arranjo)
+async function carregarInfoSalvo() {
+  if (!E.plan) return;
+  const plan = E.plan;
+  try {
+    const l = await rpc("plano_web_plano_info", { p_token: sessao.token, p_nivel: plan.nivel, p_recorte: plan.recorte, p_gondola: plan.gondola });
+    if (E.plan !== plan) return;
+    E.salvoLojas = l; E.salvoInfo = l.find((x) => x.loja === plan.loja) || null;
+    renderAcoes();
+  } catch { /* SQL 04 ainda não rodado: só não mostra */ }
+}
+const textoSalvo = (i) => (i ? ` · ${i.por ? "por " + esc(i.por) : "pelo Streamlit"} em ${esc(dataHora(i.em))}` : "");
 async function carregarPlanoSalvo(recChave, gChave, slots) {
   const rows = await rpc("plano_web_plano_salvo", { p_token: sessao.token, p_loja: E.loja, p_nivel: E.nivel, p_recorte: recChave, p_gondola: gChave });
   if (!rows || !rows.length) return null;
@@ -602,8 +618,9 @@ function renderAcoes() {
     <button type="button" class="btn btn-borda" id="ac-resetar"${tem ? "" : " disabled"} title="Descarta os arrastos e volta pro arranjo automático">${IC.resetar}Resetar</button>
     <button type="button" class="btn btn-borda" id="ac-atualizar" title="Busca de novo vendas, cadastro e base no Supabase (mantém o arranjo da tela)">${IC.atualizar}Atualizar</button>
     <button type="button" class="btn btn-borda" id="ac-imprimir"${tem ? "" : " disabled"} title="Imprimir ou salvar em PDF">${IC.imprimir}Imprimir</button>
+    <button type="button" class="btn btn-borda" id="ac-copiar"${tem ? "" : " disabled"} title="Grava este arranjo (como está na tela) em outras lojas">${IC.copiar}Copiar p/ lojas</button>
     ${ehAdmin() ? `<button type="button" class="btn btn-borda" id="ac-novo" title="Cadastra um produto com venda que não aparece por não existir na dim_produtos (ou estar sem categoria)">${IC.mais}Novo item</button>` : ""}
-    <span class="estado-plano">${tem ? (E.origem === "salvo" ? "💾 arranjo salvo" : "🟢 arranjo automático") : ""}${s ? ' · <b class="sujo">● alterações não salvas</b>' : ""}</span>`;
+    <span class="estado-plano">${tem ? (E.origem === "salvo" ? "💾 arranjo salvo" + textoSalvo(E.salvoInfo) : "🟢 arranjo automático") : ""}${s ? ' · <b class="sujo">● alterações não salvas</b>' : ""}</span>`;
   $("#ac-salvar").onclick = salvarPlano;
   $("#ac-desfazer").onclick = () => {
     if (!E.hist.length) return;
@@ -625,20 +642,89 @@ function renderAcoes() {
     renderPainel(); renderArea(); toast("Dados atualizados do Supabase.", "ok");
   };
   $("#ac-imprimir").onclick = abrirImpressao;
+  $("#ac-copiar").onclick = abrirCopiar;
   if ($("#ac-novo")) $("#ac-novo").onclick = () => abrirNovoItem();
+}
+function linhasDoPlano(shelves, fora, slots) {
+  const rows = [];
+  shelves.forEach((sh, i) => { const sl = slots[i]; sh.forEach((e, ordem) => rows.push({ modulo: sl.mod + 1, prateleira: sl.reg + 1, ordem, ean: e.ean, frentes: e.frentes })); });
+  fora.forEach((it, ordem) => rows.push({ modulo: 1, prateleira: 0, ordem, ean: it.ean, frentes: 0 }));
+  return rows;
 }
 async function salvarPlano() {
   if (!E.plan) return toast("Nada pra salvar: marque uma categoria ou subcategoria primeiro.");
-  const rows = [];
-  E.plan.shelves.forEach((sh, i) => { const sl = E.plan.slots[i]; sh.forEach((e, ordem) => rows.push({ modulo: sl.mod + 1, prateleira: sl.reg + 1, ordem, ean: e.ean, frentes: e.frentes })); });
-  E.plan.fora.forEach((it, ordem) => rows.push({ modulo: 1, prateleira: 0, ordem, ean: it.ean, frentes: 0 }));
+  const rows = linhasDoPlano(E.plan.shelves, E.plan.fora, E.plan.slots);
   const btn = $("#ac-salvar"); btn.disabled = true; btn.innerHTML = IC.salvar + "Salvando…";
   try {
-    await rpc("plano_web_salvar", { p_token: sessao.token, p_loja: E.plan.loja, p_nivel: E.plan.nivel, p_recorte: E.plan.recorte, p_gondola: E.plan.gondola, p_rows: rows });
+    const r = await rpc("plano_web_salvar", { p_token: sessao.token, p_loja: E.plan.loja, p_nivel: E.plan.nivel, p_recorte: E.plan.recorte, p_gondola: E.plan.gondola, p_rows: rows });
     E.origem = "salvo"; E.planBase = estadoPlan();
+    E.salvoInfo = { loja: E.plan.loja, em: r?.em || new Date().toISOString(), por: r?.por || sessao.usuario };
+    E.salvoLojas = (E.salvoLojas || []).filter((x) => x.loja !== E.plan.loja).concat(E.salvoInfo);
     toast("Arranjo salvo no Supabase.", "ok");
   } catch (e) { toast("Falha ao salvar: " + e.message, "erro"); }
   renderAcoes();
+}
+// ---------- copiar o arranjo pra outras lojas ----------
+// Grava o arranjo da tela (mesma gôndola e recorte) em cada loja marcada: o que a loja
+// não vende sai da gôndola (o espaço fica pra ajustar) e o que ela vende e não está aqui vai pro Banco.
+function abrirCopiar() {
+  if (!E.plan) return;
+  const plan = E.plan, col = colNivel(), escolhas = escolhasAtuais().slice().sort(cmpTxt);
+  const i = col === "categoria" ? 1 : 2;
+  const vendeRecorte = (l) => { const ops = new Set((E.inicio.opcoes || []).filter((o) => o[0] === l).map((o) => o[i])); return escolhas.some((x) => ops.has(x)); };
+  const salvoDe = (l) => (E.salvoLojas || []).find((x) => x.loja === l);
+  const outras = (E.lojas || []).filter((l) => l !== plan.loja);
+  abrirJanela(`<h3>📋 Copiar o arranjo pra outras lojas</h3>
+    <p class="nota">Grava <b>${esc(plan.titulo)}</b> na mesma gôndola, do jeito que está na tela${sujo() ? " (inclusive o que você ainda não salvou aqui)" : ""}. Em cada loja, o que ela não vende sai da gôndola — fica o espaço pra você ajustar — e o que ela vende e não está aqui vai pro Banco.</p>
+    <label class="check"><input type="checkbox" id="cp-todas"> Marcar todas</label>
+    <div class="cp-lojas">${outras.map((l) => { const ok = vendeRecorte(l), s = salvoDe(l);
+      return `<label class="cp-loja${ok ? "" : " off"}"><input type="checkbox" value="${esc(l)}"${ok ? "" : " disabled"}><span><b>${esc(nomeLoja(l))}</b>
+        <small>${!ok ? "não vende esse recorte" : s ? `⚠ já tem arranjo salvo${textoSalvo(s)} — será substituído` : "sem arranjo salvo"}</small></span></label>`; }).join("")}</div>
+    <div id="cp-res"></div>
+    <div class="acoes"><button type="button" class="btn btn-borda" id="cp-nao">Fechar</button><button type="button" class="btn btn-primario" id="cp-sim" disabled>${IC.copiar}Copiar</button></div>`);
+  const caixas = $$(".cp-lojas input:not(:disabled)"), btn = $("#cp-sim");
+  const marcadas = () => caixas.filter((c) => c.checked).map((c) => c.value);
+  const atualizar = () => { const n = marcadas().length; btn.disabled = !n; btn.innerHTML = IC.copiar + (n ? `Copiar pra ${n} loja${n > 1 ? "s" : ""}` : "Copiar"); $("#cp-todas").checked = n && n === caixas.length; };
+  caixas.forEach((c) => c.onchange = atualizar);
+  $("#cp-todas").onchange = (e) => { caixas.forEach((c) => (c.checked = e.target.checked)); atualizar(); };
+  $("#cp-nao").onclick = fecharJanela;
+  btn.onclick = async () => {
+    const lojas = marcadas();
+    const subst = lojas.filter(salvoDe);
+    if (subst.length && !confirm(`${subst.map(nomeLoja).join(", ")} já ${subst.length > 1 ? "têm" : "tem"} arranjo salvo desse recorte nessa gôndola. Substituir?`)) return;
+    btn.disabled = true; caixas.forEach((c) => (c.disabled = true));
+    const res = $("#cp-res");
+    res.innerHTML = '<table class="simples"><thead><tr><th>Loja</th><th class="num">Mantidos</th><th class="num">Saíram</th><th class="num">Pro Banco</th></tr></thead><tbody id="cp-linhas"></tbody></table>';
+    let falhas = 0;
+    for (const l of lojas) {
+      btn.innerHTML = `${IC.copiar}Copiando ${nomeLoja(l)}…`;
+      let linha;
+      try {
+        const r = await copiarPara(l, plan, col, escolhas);
+        linha = `<td>${esc(nomeLoja(l))}</td><td class="num">${r.mantidos}</td><td class="num">${r.sairam}</td><td class="num">${r.novos}</td>`;
+        E.salvoLojas = (E.salvoLojas || []).filter((x) => x.loja !== l).concat({ loja: l, em: r.em, por: r.por });
+      } catch (e) { falhas++; linha = `<td>${esc(nomeLoja(l))}</td><td colspan="3" class="erro">${esc(e.message)}</td>`; }
+      $("#cp-linhas").insertAdjacentHTML("beforeend", `<tr>${linha}</tr>`);
+    }
+    btn.innerHTML = IC.copiar + "Copiado";
+    res.insertAdjacentHTML("beforeend", '<p class="nota" style="margin-top:8px">Mantidos / saíram = produtos (SKUs) da gôndola. Abra cada loja pra fechar os espaços e conferir o Banco.</p>');
+    toast(falhas ? `Copiado com ${falhas} falha(s).` : `Arranjo copiado pra ${lojas.length} loja(s).`, falhas ? "erro" : "ok");
+  };
+}
+async function copiarPara(loja, plan, col, escolhas) {
+  const d = await carregarRecorte(col, escolhas, loja);
+  const vende = new Set(d.recorte.map((r) => r.ean));
+  const naGondola = new Set(plan.shelves.flat().map((e) => e.ean));
+  const shelves = plan.shelves.map((sh) => sh.filter((e) => vende.has(e.ean)).map((e) => ({ ean: e.ean, frentes: e.frentes })));
+  const presentes = new Set(shelves.flat().map((e) => e.ean));
+  const fora = plan.fora.filter((it) => vende.has(it.ean) && !presentes.has(it.ean)).map((it) => ({ ean: it.ean }));
+  fora.forEach((it) => presentes.add(it.ean));
+  let novos = 0;
+  d.recorte.forEach((r) => { if (!presentes.has(r.ean)) { fora.push({ ean: r.ean }); presentes.add(r.ean); novos++; } });
+  const r = await rpc("plano_web_salvar", { p_token: sessao.token, p_loja: loja, p_nivel: plan.nivel, p_recorte: plan.recorte, p_gondola: plan.gondola,
+    p_rows: linhasDoPlano(shelves, fora, plan.slots) });
+  const mantidos = new Set(shelves.flat().map((e) => e.ean)).size;
+  return { mantidos, sairam: naGondola.size - mantidos, novos, em: r?.em || new Date().toISOString(), por: r?.por || sessao.usuario };
 }
 function renderChips() {
   const el = $("#chips"); if (!el) return;
@@ -1201,6 +1287,7 @@ function abrirNovoItem(eanInicial, opc = {}) {
         catch (e) { toast("Produto cadastrado, mas a foto não subiu: " + e.message, "erro"); }
       }
       if (E.semCad) E.semCad = E.semCad.filter((x) => x.ean !== ean);
+      if (FILA.sem) FILA.sem = FILA.sem.filter((x) => x.ean !== ean);
       const pertence = integrarNovoNoPlano(prod, achado.venda);
       E.cache = {};
       fecharGaveta();
@@ -1304,7 +1391,7 @@ function lerCodigoCamera() {
 // ============================================================
 // TELA: FILA DO CADASTRO (sem foto / sem medida / sem cadastro)
 // ============================================================
-const FILA = { aba: lerLocal("plano_web_fila_aba") || "falta", loja: "", tipo: "tudo", cat: "", busca: "", limite: 150, dados: {}, buscaSem: "" };
+const FILA = { aba: lerLocal("plano_web_fila_aba") || "falta", loja: "", tipo: "tudo", cat: "", busca: "", limite: 150, dados: {}, buscaSem: "", sem: null, limiteSem: 200 };
 async function telaCadastro() {
   if (!ehAdmin()) { $("#conteudo").innerHTML = '<div class="cartao"><p class="erro">Só o Administrador cuida do cadastro.</p></div>'; return; }
   $("#conteudo").innerHTML = `<div class="pagina"><div class="cartao">
@@ -1313,49 +1400,54 @@ async function telaCadastro() {
         <button type="button" data-faba="sem" class="${FILA.aba === "sem" ? "on" : ""}">🆕 Sem cadastro</button></div>
         <button type="button" class="btn btn-primario" id="fila-novo">${IC.mais}Novo item</button></div>
       <div id="fila-corpo"><p class="nota">Carregando…</p></div></div></div>`;
-  $$("[data-faba]").forEach((b) => b.onclick = () => { FILA.aba = b.dataset.faba; gravarLocal("plano_web_fila_aba", FILA.aba); FILA.limite = 150; telaCadastro(); });
-  $("#fila-novo").onclick = () => abrirNovoItem(null, { aoSalvar: () => { FILA.dados = {}; telaCadastro(); } });
+  $$("[data-faba]").forEach((b) => b.onclick = () => { FILA.aba = b.dataset.faba; gravarLocal("plano_web_fila_aba", FILA.aba); FILA.limite = 150; FILA.limiteSem = 200; telaCadastro(); });
+  $("#fila-novo").onclick = () => abrirNovoItem(null, { aoSalvar: depoisDeCadastrar });
   if (FILA.aba === "sem") return renderSemCad();
   renderFalta();
 }
+function depoisDeCadastrar(prod) {
+  FILA.dados = {};
+  if (FILA.sem && prod) FILA.sem = FILA.sem.filter((x) => x.ean !== prod.ean);
+  if (pagina() === "cadastro") telaCadastro();
+}
 const faltaFoto = (x) => !x.foto_url;
 const faltaMedida = (x) => x.largura_cm == null || x.altura_cm == null;
+const chaveFila = () => (FILA.loja || "*") + "|" + (FILA.cat || "*");
 async function renderFalta() {
-  const corpo = $("#fila-corpo"), k = FILA.loja || "*";
+  const corpo = $("#fila-corpo"), k = chaveFila();
   if (!FILA.dados[k]) {
-    try { FILA.dados[k] = await rpc("plano_web_fila", { p_token: sessao.token, p_loja: FILA.loja || null }); }
+    try { FILA.dados[k] = await rpc("plano_web_fila", { p_token: sessao.token, p_loja: FILA.loja || null, p_categoria: FILA.cat || null }); }
     catch (e) { corpo.innerHTML = `<p class="erro">${esc(e.message)}</p>`; return; }
-    if (pagina() !== "cadastro" || FILA.aba !== "falta") return;
+    if (pagina() !== "cadastro" || FILA.aba !== "falta" || k !== chaveFila()) return;
   }
-  const d = FILA.dados[k], itens = d.itens;
-  const cats = [...new Set(itens.map((x) => x.categoria).filter(Boolean))].sort(cmpTxt);
-  if (FILA.cat && !cats.includes(FILA.cat)) FILA.cat = "";
+  const d = FILA.dados[k], cats = d.categorias || [];
   corpo.innerHTML = `<div class="fila-filtros">
       <label class="campo"><span>Loja</span><select id="ff-loja"><option value="">Todas as lojas</option>${(E.lojas || []).map((l) => `<option value="${esc(l)}"${l === FILA.loja ? " selected" : ""}>${esc(nomeLoja(l))}</option>`).join("")}</select></label>
-      <label class="campo"><span>Categoria</span><select id="ff-cat"><option value="">Todas</option>${cats.map((c) => `<option${c === FILA.cat ? " selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
+      <label class="campo"><span>Categoria</span><select id="ff-cat"><option value="">Todas (${cats.reduce((a, c) => a + c[1], 0)})</option>${cats.map(([c, n]) => `<option value="${esc(c)}"${c === FILA.cat ? " selected" : ""}>${esc(c)} (${n})</option>`).join("")}</select></label>
       <label class="campo"><span>Falta</span><div class="seg seg3">${[["tudo", "Tudo"], ["foto", "Foto"], ["medida", "Medida"]].map(([v, t]) => `<button type="button" data-ftipo="${v}" class="${FILA.tipo === v ? "on" : ""}">${t}</button>`).join("")}</div></label>
       <label class="campo"><span>Procurar</span><input id="ff-busca" type="search" placeholder="descrição, marca ou EAN" value="${esc(FILA.busca)}"></label>
     </div>
     <div id="ff-resumo" class="chips-rec"></div>
     <div class="tabela-wrap"><table class="simples fila"><thead><tr><th></th><th>Produto</th><th>Categoria</th><th class="num">Venda</th><th>Falta</th><th></th></tr></thead><tbody id="ff-linhas"></tbody></table></div>
     <div id="ff-mais"></div>`;
-  $("#ff-loja").onchange = (e) => { FILA.loja = e.target.value; FILA.limite = 150; corpo.innerHTML = '<p class="nota">Carregando…</p>'; renderFalta(); };
-  $("#ff-cat").onchange = (e) => { FILA.cat = e.target.value; FILA.limite = 150; linhasFalta(); };
+  const recarregar = () => { FILA.limite = 150; $("#ff-linhas").innerHTML = '<tr><td colspan="6" class="nota">Carregando…</td></tr>'; renderFalta(); };
+  $("#ff-loja").onchange = (e) => { FILA.loja = e.target.value; recarregar(); };
+  $("#ff-cat").onchange = (e) => { FILA.cat = e.target.value; recarregar(); };
   $$("[data-ftipo]", corpo).forEach((b) => b.onclick = () => { FILA.tipo = b.dataset.ftipo; FILA.limite = 150; $$("[data-ftipo]", corpo).forEach((x) => x.classList.toggle("on", x === b)); linhasFalta(); });
   $("#ff-busca").oninput = (e) => { FILA.busca = e.target.value; FILA.limite = 150; linhasFalta(); };
   linhasFalta();
 }
 function linhasFalta() {
-  const d = FILA.dados[FILA.loja || "*"]; if (!d || !$("#ff-linhas")) return;
-  const b = semAcento(FILA.busca);
+  const d = FILA.dados[chaveFila()]; if (!d || !$("#ff-linhas")) return;
+  const b = semAcento(FILA.busca), completo = d.itens.length < (d.limite || 1e9);
   const pend = d.itens.filter((x) => faltaFoto(x) || faltaMedida(x));
-  const vis = pend.filter((x) => (!FILA.cat || x.categoria === FILA.cat)
-    && (FILA.tipo === "tudo" || (FILA.tipo === "foto" ? faltaFoto(x) : faltaMedida(x)))
+  const vis = pend.filter((x) => (FILA.tipo === "tudo" || (FILA.tipo === "foto" ? faltaFoto(x) : faltaMedida(x)))
     && (!b || semAcento([x.descricao, x.marca, x.ean, x.codigo_erp].join(" ")).includes(b)));
-  const nFoto = pend.filter(faltaFoto).length, nMed = pend.filter(faltaMedida).length;
+  // contagem: a lista inteira veio -> conta na tela (já desconta o que foi resolvido); senão, o total do banco
+  const nFoto = completo ? pend.filter(faltaFoto).length : d.totais.foto, nMed = completo ? pend.filter(faltaMedida).length : d.totais.medida;
   $("#ff-resumo").innerHTML = `<span class="chip-rec">📷 ${nFoto} sem foto</span><span class="chip-rec">📐 ${nMed} sem medida</span>` +
     (d.sem_cadastro ? `<button type="button" class="chip-rec chip-link" id="ff-ir-sem">🆕 ${d.sem_cadastro} com venda e sem cadastro →</button>` : "") +
-    `<span class="nota">${vis.length === pend.length ? "" : vis.length + " no filtro · "}os que mais vendem primeiro${d.itens.length >= 1500 ? " (top 1500)" : ""}</span>`;
+    `<span class="nota">${vis.length === pend.length ? "" : vis.length + " no filtro · "}os que mais vendem primeiro${completo ? "" : ` · mostrando os ${d.itens.length} primeiros de ${d.totais.itens} — escolha uma categoria pra ver todos`}</span>`;
   const ir = $("#ff-ir-sem"); if (ir) ir.onclick = () => { FILA.aba = "sem"; gravarLocal("plano_web_fila_aba", "sem"); telaCadastro(); };
   const mostra = vis.slice(0, FILA.limite);
   $("#ff-linhas").innerHTML = mostra.length ? mostra.map((x) => `<tr>
@@ -1370,31 +1462,42 @@ function linhasFalta() {
   const mb = $("#ff-mais-btn"); if (mb) mb.onclick = () => { FILA.limite += 150; linhasFalta(); };
   $$("[data-fed]").forEach((bt) => bt.onclick = () => {
     const it = d.itens.find((x) => x.ean === bt.dataset.fed);
-    abrirEditor(it.ean, { produto: it, aoSalvar: () => { Object.values(FILA.dados).forEach((dd) => dd !== d && dd.itens.forEach((y) => { if (y.ean === it.ean) Object.assign(y, it); })); linhasFalta(); } });
+    abrirEditor(it.ean, { produto: it, aoSalvar: () => {
+      Object.values(FILA.dados).forEach((dd) => dd !== d && dd.itens.forEach((y) => { if (y.ean === it.ean) Object.assign(y, it); }));
+      linhasFalta();
+    } });
   });
 }
 async function renderSemCad() {
   const corpo = $("#fila-corpo");
-  let l;
-  try { l = await carregarSemCadastro(); } catch (e) { corpo.innerHTML = `<p class="erro">${esc(e.message)}</p>`; return; }
-  if (pagina() !== "cadastro" || FILA.aba !== "sem") return;
+  if (!FILA.sem) {
+    try { FILA.sem = await rpc("plano_web_sem_cadastro", { p_token: sessao.token, p_limite: 20000 }); }
+    catch (e) { corpo.innerHTML = `<p class="erro">${esc(e.message)}</p>`; return; }
+    if (pagina() !== "cadastro" || FILA.aba !== "sem") return;
+  }
+  const l = FILA.sem, naBase = l.filter((x) => x.base).length;
   corpo.innerHTML = `<p class="nota" style="margin-bottom:10px">Produtos que <b>vendem</b> mas não existem na dim_produtos — por isso não aparecem em nenhum planograma. Quando a base de ativos conhece o código, o cadastro já vem preenchido.</p>
     <div class="fila-filtros"><label class="campo"><span>Procurar</span><input id="fs-busca" type="search" placeholder="EAN ou descrição da base" value="${esc(FILA.buscaSem)}"></label></div>
+    <div class="chips-rec" style="margin-bottom:10px"><span class="chip-rec">🆕 ${l.length} sem cadastro</span><span class="chip-rec">📄 ${naBase} já na base de ativos (vêm preenchidos)</span><span class="nota" id="fs-conta"></span></div>
     <div class="tabela-wrap"><table class="simples fila"><thead><tr><th>EAN</th><th>Na base de ativos</th><th>Lojas</th><th class="num">Venda</th><th></th></tr></thead><tbody id="fs-linhas"></tbody></table></div>
-    <p class="nota" style="margin-top:8px">${l.length >= 500 ? "Mostrando os 500 que mais vendem." : l.length + " produto(s)."}</p>`;
+    <div id="fs-mais" style="margin-top:10px"></div>`;
   const pintar = () => {
     const b = semAcento(FILA.buscaSem);
     const vis = l.filter((x) => !b || semAcento([x.ean, x.base?.descricao, x.base?.marca].join(" ")).includes(b));
-    $("#fs-linhas").innerHTML = vis.length ? vis.slice(0, 500).map((x) => `<tr>
+    const mostra = vis.slice(0, FILA.limiteSem);
+    $("#fs-conta").textContent = vis.length === l.length ? "os que mais vendem primeiro" : vis.length + " no filtro";
+    $("#fs-linhas").innerHTML = mostra.length ? mostra.map((x) => `<tr>
         <td class="num"><b>${esc(x.ean)}</b></td>
         <td>${x.base ? `${esc(x.base.descricao || "")}<small>${esc([x.base.categoria, x.base.subcategoria].filter(Boolean).join(" › "))}</small>` : '<span class="nota">não está na base</span>'}</td>
         <td>${esc(x.lojas || "")}</td>
         <td class="num">${esc(reais(x.venda))}</td>
         <td><button type="button" class="btn btn-primario mini" data-fcad="${esc(x.ean)}">Cadastrar</button></td></tr>`).join("")
       : `<tr><td colspan="5" class="nota">${l.length ? "Nada com esse filtro." : "🎉 Nenhum produto com venda sem cadastro."}</td></tr>`;
-    $$("[data-fcad]").forEach((bt) => bt.onclick = () => abrirNovoItem(bt.dataset.fcad, { aoSalvar: () => { FILA.dados = {}; if (pagina() === "cadastro") telaCadastro(); } }));
+    $("#fs-mais").innerHTML = vis.length > mostra.length ? `<button type="button" class="btn btn-borda" id="fs-mais-btn">Mostrar mais (${vis.length - mostra.length})</button>` : "";
+    const mb = $("#fs-mais-btn"); if (mb) mb.onclick = () => { FILA.limiteSem += 200; pintar(); };
+    $$("[data-fcad]").forEach((bt) => bt.onclick = () => abrirNovoItem(bt.dataset.fcad, { aoSalvar: depoisDeCadastrar }));
   };
-  $("#fs-busca").oninput = (e) => { FILA.buscaSem = e.target.value; pintar(); };
+  $("#fs-busca").oninput = (e) => { FILA.buscaSem = e.target.value; FILA.limiteSem = 200; pintar(); };
   pintar();
 }
 

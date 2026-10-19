@@ -614,3 +614,11 @@ table.fila .mini-foto { width: 52px; }
 .badge.b-falta { background: var(--laranja-claro); color: var(--laranja); }
 #ff-mais { margin-top: 10px; }
 @media (max-width: 600px) { .ean-linha { grid-template-columns: 1fr; } }
+/* ---------- copiar pra lojas ---------- */
+.cp-lojas { display: grid; gap: 6px; max-height: 320px; overflow-y: auto; }
+.cp-loja { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--borda); border-radius: 10px; padding: 8px 10px; cursor: pointer; }
+.cp-loja input { margin-top: 3px; }
+.cp-loja span { display: grid; gap: 1px; }
+.cp-loja small { color: var(--texto-suave); font-size: .76rem; }
+.cp-loja.off { opacity: .5; cursor: default; }
+.janela:has(.cp-lojas) { width: min(560px, calc(100% - 32px)); }
